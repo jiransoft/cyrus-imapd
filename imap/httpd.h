@@ -184,7 +184,8 @@ enum {
     AUTH_SPNEGO       = (1<<1),
     AUTH_BEARER       = (1<<2),
     AUTH_SCRAM_SHA1   = (1<<3),
-    AUTH_SCRAM_SHA256 = (1<<4)
+    AUTH_SCRAM_SHA256 = (1<<4),
+    AUTH_XOAUTH2      = (1<<5)
 };
 
 /* Auth scheme flags */
