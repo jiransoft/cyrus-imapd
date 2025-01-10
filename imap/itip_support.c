@@ -580,9 +580,15 @@ static const char *deliver_merge_reply(icalcomponent *ical,  // current iCalenda
 
         /* Find matching attendee in existing object */
         for (prop = icalcomponent_get_first_invitee(comp);
-             prop && strcmpnull(attendee,
-                                icalproperty_get_decoded_calendaraddress(prop));
-             prop = icalcomponent_get_next_invitee(comp));
+             prop;
+             prop = icalcomponent_get_next_invitee(comp)) {
+            const char *existing =
+                icalproperty_get_decoded_calendaraddress(prop);
+            if (existing && attendee &&
+                !strcasecmp(attendee, existing)) {
+                break;
+            }
+        }
         if (!prop) {
             /* Attendee added themselves to this recurrence */
             assert(icalproperty_isa(att) == ICAL_ATTENDEE_PROPERTY);
