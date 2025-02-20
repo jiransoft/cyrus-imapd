@@ -8198,6 +8198,20 @@ static int meth_options_cal(struct transaction_t *txn, void *params)
 
     /* Parse the path */
     r = dav_parse_req_target(txn, oparams);
+
+    /*
+    * For OPTIONS requests, check the Access-Control-Request-Method header.
+    * If the header indicates an upcoming MKCOL request, bypass the missing mailbox error
+    * and generate the default OPTIONS response headers.
+    */
+    if (r && txn->meth == METH_OPTIONS) {    
+        const char **req_header = spool_getheader(txn->req_hdrs, "Access-Control-Request-Method");
+        if (req_header && *req_header && !strcasecmp(*req_header, "MKCOL")) {
+            syslog(LOG_INFO, "OPTIONS preflight: Detected MKCOL request, bypassing missing mailbox error");
+            return meth_options(txn, oparams->parse_path);
+        }
+    }
+
     if (r) return r;
 
     if (txn->req_tgt.allow & ALLOW_PATCH) {
