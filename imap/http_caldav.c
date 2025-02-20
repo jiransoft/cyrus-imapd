@@ -8208,6 +8208,12 @@ static int meth_options_cal(struct transaction_t *txn, void *params)
         const char **req_header = spool_getheader(txn->req_hdrs, "Access-Control-Request-Method");
         if (req_header && *req_header && !strcasecmp(*req_header, "MKCOL")) {
             syslog(LOG_INFO, "OPTIONS preflight: Detected MKCOL request, bypassing missing mailbox error");
+
+            /* Set CORS preflight flag and enable DAV methods */
+            txn->flags.cors = CORS_PREFLIGHT;
+            txn->req_tgt.allow |= ALLOW_DAV;
+            txn->req_tgt.allow |= ALLOW_MKCOL;
+            
             return meth_options(txn, oparams->parse_path);
         }
     }
