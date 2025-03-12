@@ -180,6 +180,11 @@ extern int message_parse_file_buf(FILE *infile,
 extern void message_parse_string(const char *hdr, char **hdrp);
 extern void message_pruneheader(char *buf, const strarray_t *headers,
                                 const strarray_t *headers_not);
+
+/* Parse X-Status and X-Mozilla-Status headers to extract message flags */
+extern uint32_t message_parse_xstatus(const char *hdr);
+extern uint32_t message_parse_xmozillastatus(const char *hdr);
+
 extern void message_fetch_part(struct message_content *msg,
                                const char **content_types,
                                struct bodypart ***parts);
