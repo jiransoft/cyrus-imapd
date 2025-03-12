@@ -2067,6 +2067,76 @@ EXPORTED void message_parse_received_date(const char *hdr, char **hdrp)
   free(hdrbuf);
 }
 
+/*
+ * Parse X-Status header to extract message flags
+ * X-Status header format is typically:
+ * - 'R' for \Seen (Read)
+ * - 'F' for \Flagged
+ * - 'A' for \Answered
+ * - 'D' for \Draft
+ * Returns a bitmask of system flags
+ */
+EXPORTED uint32_t message_parse_xstatus(const char *hdr)
+{
+    uint32_t system_flags = 0;
+    const char *p;
+
+    if (!hdr) return 0;
+
+    /* Skip leading whitespace */
+    while (*hdr == ' ' || *hdr == '\t') hdr++;
+
+    for (p = hdr; *p; p++) {
+        switch (*p) {
+        case 'R':
+            system_flags |= FLAG_SEEN;
+            break;
+        case 'F':
+            system_flags |= FLAG_FLAGGED;
+            break;
+        case 'A':
+            system_flags |= FLAG_ANSWERED;
+            break;
+        case 'D':
+            system_flags |= FLAG_DRAFT;
+            break;
+        }
+    }
+
+    return system_flags;
+}
+
+/*
+ * Parse X-Mozilla-Status header to extract message flags
+ * X-Mozilla-Status is a 4-digit hex number with the following bits:
+ * 0x0001 = \Seen (Read)
+ * 0x0002 = \Answered
+ * 0x0008 = \Flagged
+ * 0x0010 = \Deleted
+ * 0x0020 = \Draft
+ * Returns a bitmask of system flags
+ */
+EXPORTED uint32_t message_parse_xmozillastatus(const char *hdr)
+{
+    uint32_t system_flags = 0;
+    unsigned long val = 0;
+    char *endptr = NULL;
+
+    if (!hdr) return 0;
+
+    /* Skip leading whitespace */
+    while (*hdr == ' ' || *hdr == '\t') hdr++;
+
+    val = strtoul(hdr, &endptr, 16);
+    
+    if (val & 0x0001) system_flags |= FLAG_SEEN;
+    if (val & 0x0002) system_flags |= FLAG_ANSWERED;
+    if (val & 0x0008) system_flags |= FLAG_FLAGGED;
+    if (val & 0x0010) system_flags |= FLAG_DELETED;
+    if (val & 0x0020) system_flags |= FLAG_DRAFT;
+
+    return system_flags;
+}
 
 /*
  * Read a line from @msg into @buf.  Returns a pointer to the start of

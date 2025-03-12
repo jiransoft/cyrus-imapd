@@ -116,6 +116,7 @@
 #include "xstrlcat.h"
 #include "xstats.h"
 #include "xunlink.h"
+#include "times.h"
 
 
 #if defined ENABLE_OBJECTSTORE
@@ -2937,8 +2938,8 @@ static bit32 mailbox_index_header_to_buf(struct index_header *i, unsigned char *
     *((bit32 *)(buf+OFFSET_RECENTTIME)) = htonl(i->recenttime);
     if (i->minor_version > 12) {
         /* these were added in version 13, but replaced zero-byte fields in
-         * in version 12, so if we don't write them then the CRC will still
-         * be correct for version 12, since the header size didn't change */
+        * in version 12, so if we don't write them then the CRC will still
+        * be correct for version 12, since the header size didn't change */
         *((bit32 *)(buf+OFFSET_POP3_SHOW_AFTER)) = htonl(i->pop3_show_after);
         /* this field is 64b in memory but 32b on disk - as it counts
         * bytes stored in dbs and the dbs are 32b anyway there should
@@ -7342,6 +7343,63 @@ static int mailbox_reconstruct_compare_update(struct mailbox *mailbox,
         if (!record->internaldate)
             record->internaldate = copy.internaldate;
 
+        /* Process X-Status and X-Mozilla-Status headers if present */
+        if (make_changes) {
+            struct buf buf = BUF_INITIALIZER;
+            uint32_t xstatus_flags = 0;
+            message_t *msg = NULL;
+            
+            /* Create message object for header access */
+            msg = message_new_from_record(mailbox, record);
+            
+            /* Check for X-Status header */
+            if (!message_get_field(msg, "X-Status", MESSAGE_RAW, &buf)) {
+                xstatus_flags |= message_parse_xstatus(buf_cstring(&buf));
+            }
+            
+            /* Check for X-Mozilla-Status header */
+            buf_reset(&buf);
+            if (!message_get_field(msg, "X-Mozilla-Status", MESSAGE_RAW, &buf)) {
+                xstatus_flags |= message_parse_xmozillastatus(buf_cstring(&buf));
+            }
+            
+            /* Apply the flags if any were found */
+            if (xstatus_flags) {
+                printf("%s uid %u applying flags from X-Status/X-Mozilla-Status headers: %08X\n",
+                       mailbox_name(mailbox), record->uid, xstatus_flags);
+                syslog(LOG_NOTICE, "%s uid %u applying flags from X-Status/X-Mozilla-Status headers: %08X",
+                       mailbox_name(mailbox), record->uid, xstatus_flags);
+                
+                /* Only set flags, don't clear existing ones */
+                record->system_flags |= xstatus_flags;
+            }
+            
+            /* Check for Date header and set internaldate if requested */
+            buf_reset(&buf);
+            if (!message_get_field(msg, "Date", MESSAGE_RAW, &buf)) {
+                const char *date_str = buf_cstring(&buf);
+                time_t date_time = 0;
+                
+                /* Parse the Date header using RFC5322 parser */
+                if (time_from_rfc5322(date_str, &date_time, DATETIME_FULL) > 0) {
+                    /* Only update if we successfully parsed a date */
+                    if (date_time > 0) {
+                        printf("%s uid %u setting internaldate from Date header: %s\n",
+                               mailbox_name(mailbox), record->uid, date_str);
+                        syslog(LOG_NOTICE, "%s uid %u setting internaldate from Date header: %s",
+                               mailbox_name(mailbox), record->uid, date_str);
+                        
+                        /* Set the internaldate to the parsed Date header value */
+                        record->internaldate = date_time;
+                    }
+                }
+            }
+            
+            /* Clean up */
+            message_unref(&msg);
+            buf_free(&buf);
+        }
+
         /* it's not the same message! */
         if (!message_guid_equal(&record->guid, &copy.guid)) {
             int do_unlink = 0;
@@ -8464,7 +8522,7 @@ HIDDEN int mailbox_changequotaroot(struct mailbox *mailbox,
             quota_diff[res] = -quota_usage[res];
         }
         r = quota_update_useds(mailbox->h.quotaroot, quota_diff,
-                               mailbox_name(mailbox), silent);
+                                mailbox_name(mailbox), silent);
     }
 
     /* update (or set) the quotaroot */
