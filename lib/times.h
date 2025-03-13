@@ -110,4 +110,9 @@ int time_to_rfc5322(time_t date, char *buf, size_t len);
 int offsettime_from_rfc5322(const char *s, struct offsettime *t, enum datetime_parse_mode mode);
 int offsettime_to_rfc5322(struct offsettime *t, char *buf, size_t len);
 
+/* Normalizes various Date header formats to RFC5322 format.
+ * Returns: length of normalized string on success, -1 on failure
+ */
+int normalize_date_header(const char *input, char *output, size_t output_size);
+
 #endif /* __CYRUS__TIME_H__ */

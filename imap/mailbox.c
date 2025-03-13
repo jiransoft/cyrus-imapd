@@ -7204,17 +7204,40 @@ static int mailbox_reconstruct_compare_update(struct mailbox *mailbox,
                 const char *date_str = buf_cstring(&buf);
                 time_t date_time = 0;
                 
+                /* Buffer to store normalized Date header */
+                char normalized_date[RFC5322_DATETIME_MAX+1];
+                int normalize_result = -1;
+                
+                /* Try to normalize Date header */
+                normalize_result = normalize_date_header(date_str, normalized_date, sizeof(normalized_date));
+                
+                /* Use normalized string if successful, otherwise use original */
+                const char *parse_str = (normalize_result > 0) ? normalized_date : date_str;
+                
                 /* Parse the Date header using RFC5322 parser */
-                if (time_from_rfc5322(date_str, &date_time, DATETIME_FULL) > 0) {
+                int parse_result = time_from_rfc5322(parse_str, &date_time, DATETIME_FULL);
+                if (parse_result > 0) {
                     /* Only update if we successfully parsed a date */
                     if (date_time > 0) {
-                        printf("%s uid %u setting internaldate from Date header: %s\n",
-                               mailbox_name(mailbox), record->uid, date_str);
-                        syslog(LOG_NOTICE, "%s uid %u setting internaldate from Date header: %s",
-                               mailbox_name(mailbox), record->uid, date_str);
+                        if (normalize_result > 0) {
+                            printf("%s uid %u setting internaldate from normalized Date header: %s -> %s\n",
+                                   mailbox_name(mailbox), record->uid, date_str, parse_str);
+                            syslog(LOG_NOTICE, "%s uid %u setting internaldate from normalized Date header: %s -> %s",
+                                   mailbox_name(mailbox), record->uid, date_str, parse_str);
+                        } else {
+                            printf("%s uid %u setting internaldate from Date header: %s\n",
+                                   mailbox_name(mailbox), record->uid, date_str);
+                            syslog(LOG_NOTICE, "%s uid %u setting internaldate from Date header: %s",
+                                   mailbox_name(mailbox), record->uid, date_str);
+                        }
                         
                         /* Set the internaldate to the parsed Date header value */
                         record->internaldate = date_time;
+                    } else {
+                        printf("%s uid %u invalid date_time value from Date header: %s (value: %ld)\n",
+                               mailbox_name(mailbox), record->uid, date_str, (long)date_time);
+                        syslog(LOG_NOTICE, "%s uid %u invalid date_time value from Date header: %s (value: %ld)",
+                               mailbox_name(mailbox), record->uid, date_str, (long)date_time);
                     }
                 }
                 else {

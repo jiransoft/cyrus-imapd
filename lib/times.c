@@ -1460,3 +1460,66 @@ EXPORTED int offsettime_to_rfc5322(struct offsettime *t, char *buf, size_t len)
              t->tm.tm_hour, t->tm.tm_min, t->tm.tm_sec,
              gmtnegative ? '-' : '+', gmtoff/60, gmtoff%60);
 }
+
+/*
+ * normalize_date_header()
+ * Normalizes various Date header formats to RFC5322 format.
+ * 
+ * Main processing:
+ * 1. Converts 3-digit timezone (e.g., +090) to 4-digit format (+0900)
+ * 2. Handles unclosed parentheses
+ * 3. Fixes other format errors
+ * 
+ * Returns: length of normalized string on success, -1 on failure
+ */
+EXPORTED int normalize_date_header(const char *input, char *output, size_t output_size)
+{
+    if (!input || !output || output_size < 32) {
+        return -1;
+    }
+    
+    char weekday[4] = {0};
+    char month[4] = {0};
+    int day = 0, year = 0, hour = 0, min = 0, sec = 0;
+    char tz_sign = '+';
+    int tz_hour = 0, tz_min = 0;
+    
+    /* Basic format: "Day, DD Mon YYYY HH:MM:SS TZTZ" */
+    int matched = sscanf(input, "%3[^,], %d %3[^ ] %d %d:%d:%d %c%d",
+                         weekday, &day, month, &year, &hour, &min, &sec, &tz_sign, &tz_hour);
+    
+    if (matched < 9) {
+        /* Return original on parsing failure */
+        strncpy(output, input, output_size - 1);
+        output[output_size - 1] = '\0';
+        return -1;
+    }
+    
+    /* Try to extract timezone minutes */
+    const char *tz_start = strchr(input, tz_sign);
+    if (tz_start) {
+        tz_start++; /* Move past '+' or '-' */
+        
+        /* Handle 3-digit timezone (e.g., +090) */
+        if (strlen(tz_start) >= 3 && isdigit(tz_start[0]) && isdigit(tz_start[1]) && isdigit(tz_start[2])) {
+            if (strlen(tz_start) == 3 || !isdigit(tz_start[3])) {
+                /* 3-digit timezone: first two digits are hours, last digit is tens of minutes */
+                tz_hour = (tz_start[0] - '0') * 10 + (tz_start[1] - '0');
+                tz_min = (tz_start[2] - '0') * 10;
+            }
+            else {
+                /* 4+ digit timezone: first two digits are hours, next two are minutes */
+                tz_hour = (tz_start[0] - '0') * 10 + (tz_start[1] - '0');
+                tz_min = (tz_start[2] - '0') * 10 + (tz_start[3] - '0');
+            }
+        }
+    }
+    
+    /* Convert to RFC5322 format */
+    int result = snprintf(output, output_size, 
+                         "%s, %02d %s %04d %02d:%02d:%02d %c%02d%02d",
+                         weekday, day, month, year, hour, min, sec, 
+                         tz_sign, tz_hour, tz_min);
+    
+    return (result > 0 && (size_t)result < output_size) ? result : -1;
+}
