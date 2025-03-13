@@ -7217,6 +7217,12 @@ static int mailbox_reconstruct_compare_update(struct mailbox *mailbox,
                         record->internaldate = date_time;
                     }
                 }
+                else {
+                    printf("%s uid %u failed to parse Date header: %s\n",
+                           mailbox_name(mailbox), record->uid, date_str);
+                    syslog(LOG_ERR, "%s uid %u failed to parse Date header: %s",
+                           mailbox_name(mailbox), record->uid, date_str);
+                }
             }
             
             /* Clean up */
