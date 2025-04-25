@@ -4093,7 +4093,7 @@ static int auth_success(struct transaction_t *txn, const char *userid)
 static int http_auth(const char *creds, struct transaction_t *txn)
 {
     struct auth_challenge_t *chal = &txn->auth_chal;
-    static int status = SASL_OK;
+    int status = SASL_OK;
     int slen, r;
     const char *clientin = NULL, *realm = NULL, *user, **authzid;
     unsigned int clientinlen = 0;
