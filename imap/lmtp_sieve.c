@@ -761,6 +761,10 @@ static int send_forward(sieve_redirect_context_t *rc,
     if (srs_return_path) {
         smtp_envelope_set_from(&sm_env, srs_return_path);
     }
+    else if (ctx->userid && *ctx->userid) {
+        syslog(LOG_INFO, "sieve forward from userid: %s", ctx->userid);
+        smtp_envelope_set_from(&sm_env, ctx->userid);
+    }
     else if (return_path && *return_path) {
         smtp_envelope_set_from(&sm_env, return_path);
     }
@@ -1778,7 +1782,7 @@ static int sieve_keep(void *ac,
     if (freeme) auth_freestate(freeme);
 
     if (kc->headers) cleanup_special_delivery(mydata);
- 
+
   done:
     if (!ret) {
         prometheus_increment(CYRUS_LMTP_SIEVE_KEEP_TOTAL);
@@ -2253,7 +2257,7 @@ sieve_interp_t *setup_sieve(struct sieve_interp_ctx *ctx)
     sieve_register_body(interp, &getbody);
     sieve_register_include(interp, &getinclude);
 
-    sieve_register_logger(interp, &sieve_log); 
+    sieve_register_logger(interp, &sieve_log);
 
     res = sieve_register_vacation(interp, &vacation);
     if (res != SIEVE_OK) {
@@ -2469,4 +2473,3 @@ done:
     mboxname_release(&namespacelock);
     return r;
 }
-
