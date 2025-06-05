@@ -492,8 +492,8 @@ static int validate_payload(struct jwt *jwt, char *out, size_t outlen)
     int ret = 0;
 
     json_t *jws = json_loads(buf_cstring(&jwt->buf), JSON_REJECT_DUPLICATES, NULL);
-    if (!json_object_size(jws) || json_object_size(jws) > 2) {
-        xsyslog(LOG_ERR, "Unexpected JWS payload structure", NULL);
+    if (!json_object_size(jws)) {
+        xsyslog(LOG_ERR, "Empty JWS payload", NULL);
         goto done;
     }
 
@@ -503,15 +503,13 @@ static int validate_payload(struct jwt *jwt, char *out, size_t outlen)
         goto done;
     }
 
-    if (json_object_size(jws) == 2) {
-        json_t *jiat = json_object_get(jws, "iat");
+    // Check for iat claim if present
+    json_t *jiat = json_object_get(jws, "iat");
+    if (jiat) {
         if (!json_is_integer(jiat)) {
-            if (jiat) {
-                char *val = json_dumps(jiat, JSON_COMPACT|JSON_ENCODE_ANY);
-                xsyslog(LOG_ERR, "Invalid \"iat\" claim", "iat=<%s>", val);
-                free(val);
-            }
-            else xsyslog(LOG_ERR, "JWT contains unsupported claims", NULL);
+            char *val = json_dumps(jiat, JSON_COMPACT|JSON_ENCODE_ANY);
+            xsyslog(LOG_ERR, "Invalid \"iat\" claim", "iat=<%s>", val);
+            free(val);
             goto done;
         }
 
