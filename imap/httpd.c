@@ -1947,15 +1947,15 @@ EXPORTED int examine_request(struct transaction_t *txn, const char *uri)
         ret = HTTP_UNAUTHORIZED;
     }
 
+    /* Perform post-authentication check of headers (including CORS) */
+    postauth_check_hdrs(txn);
+
     if (ret) return client_need_auth(txn, sasl_result);
 
     /* Parse any query parameters */
     construct_hash_table(&txn->req_qparams, 10, 1);
     query = URI_QUERY(txn->req_uri);
     if (query) parse_query_params(txn, query);
-
-    /* Perform post-authentication check of headers */
-    postauth_check_hdrs(txn);
 
     return 0;
 }
