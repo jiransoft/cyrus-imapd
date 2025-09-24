@@ -8709,6 +8709,7 @@ static void _email_append(jmap_req_t *req,
                           int(*writecb)(jmap_req_t* req, FILE* fp, void* rock, json_t **err),
                           void *rock,
                           struct email_append_detail *detail,
+                          int allow_duplicate,
                           json_t **err)
 {
     int fd;
@@ -8850,13 +8851,15 @@ static void _email_append(jmap_req_t *req,
 
     /*  Check if a message with this GUID already exists and is
      *  visible for the authenticated user. */
-    char *exist_mboxname = NULL;
-    uint32_t exist_uid;
-    r = jmap_email_find(req, NULL, detail->email_id, &exist_mboxname, &exist_uid);
-    free(exist_mboxname);
-    if (r != IMAP_NOTFOUND) {
-        if (!r) r = IMAP_MAILBOX_EXISTS;
-        goto done;
+    if (!allow_duplicate) {
+        char *exist_mboxname = NULL;
+        uint32_t exist_uid;
+        r = jmap_email_find(req, NULL, detail->email_id, &exist_mboxname, &exist_uid);
+        free(exist_mboxname);
+        if (r != IMAP_NOTFOUND) {
+            if (!r) r = IMAP_MAILBOX_EXISTS;
+            goto done;
+        }
     }
 
     /* Great, that's a new message! */
@@ -10858,7 +10861,7 @@ static void _email_create(jmap_req_t *req,
     _email_append(req, jmailboxids, &keywords, email.internaldate, email.snoozed,
                   config_getswitch(IMAPOPT_JMAP_SET_HAS_ATTACHMENT) ?
                   email.has_attachment : 0, NULL, _email_to_mime, &email,
-                  &detail, set_err);
+                  &detail, 0, set_err); /* Email/set always disallows duplicates */
     if (*set_err) goto done;
 
     /* Return newly created Email object */
@@ -13328,9 +13331,16 @@ gotrecord:
     if (!internaldate)
         internaldate = time(NULL);
 
+    /* Get allowDuplicate setting */
+    int allow_duplicate = 0;
+    json_t *jallow_duplicate = json_object_get(jemail_import, "allowDuplicate");
+    if (jallow_duplicate && json_is_boolean(jallow_duplicate)) {
+        allow_duplicate = json_boolean_value(jallow_duplicate);
+    }
+
     /* Write the message to the file system */
     _email_append(req, jmailbox_ids, &keywords, internaldate, snoozed,
-            has_attachment, sourcefile, _email_import_cb, &content, &detail, err);
+            has_attachment, sourcefile, _email_import_cb, &content, &detail, allow_duplicate, err);
 
     msgrecord_unref(&mr);
     jmap_closembox(req, &mbox);
@@ -13467,6 +13477,12 @@ static int jmap_email_import(jmap_req_t *req)
             !(json_is_utcdate(json_object_get(snoozed, "until")) &&
               have_snoozed_mboxid)) {
             jmap_parser_invalid(&parser, "snoozed");
+        }
+
+        /* allowDuplicate */
+        json_t *jallow_duplicate = json_object_get(jemail_import, "allowDuplicate");
+        if (JNOTNULL(jallow_duplicate) && !json_is_boolean(jallow_duplicate)) {
+            jmap_parser_invalid(&parser, "allowDuplicate");
         }
 
         json_t *invalid = json_incref(parser.invalid);
