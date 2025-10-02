@@ -2456,7 +2456,7 @@ void sched_request(const char *userid, const strarray_t *schedule_addresses,
     add_attendees(oldical, organizer, hide_attendees, &attendees, NULL);
 
 	int has_new_attendee = 0;
-    add_attendees(newical, organizer, hide_attendees, &attendees, has_new_attendee);
+    add_attendees(newical, organizer, hide_attendees, &attendees, &has_new_attendee);
 
     icaltimetype h_cutoff = get_historical_cutoff();
 
