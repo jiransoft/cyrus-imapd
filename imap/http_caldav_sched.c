@@ -2025,7 +2025,7 @@ static void schedule_sub_updates(const char *userid, const strarray_t *schedule_
 static void schedule_full_update(const char *userid, const strarray_t *schedule_addresses,
                                  const char *organizer, const char *attendee,
                                  icalcomponent *mastercomp, icaltimetype h_cutoff,
-                                 icalcomponent *oldical, icalcomponent *newical, int force_send)
+                                 icalcomponent *oldical, icalcomponent *newical, int has_new_attendee)
 {
     /* create an itip for the complete event */
     icalcomponent *itip = make_itip(ICAL_METHOD_REQUEST, newical);
@@ -2034,7 +2034,7 @@ static void schedule_full_update(const char *userid, const strarray_t *schedule_
     clean_component(mastercopy);
     icalcomponent_add_component(itip, mastercopy);
 
-    int do_send = force_send;
+    int do_send = has_new_attendee;
     unsigned flags = 0;
 
     icalcomponent *oldmaster = find_attended_component(oldical, "", attendee);
@@ -2108,7 +2108,7 @@ static void schedule_full_update(const char *userid, const strarray_t *schedule_
     }
     else {
         /* just look for sub updates */
-        schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, force_send);
+        schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, has_new_attendee);
     }
 
     icalcomponent_free(itip);
