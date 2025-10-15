@@ -1922,8 +1922,7 @@ static void schedule_sub_updates(const char *cal_ownerid, const char *sched_user
                                  const char *organizer, const char *attendee,
                                  icaltimetype h_cutoff,
                                  icalcomponent *oldical, icalcomponent *newical,
-                                 enum sched_mechanism mech,
-                                 int has_changed_attendee)
+                                 enum sched_mechanism mech)
 {
     if (!newical) return;
 
@@ -1937,7 +1936,7 @@ static void schedule_sub_updates(const char *cal_ownerid, const char *sched_user
     icalcomponent *comp = icalcomponent_get_first_real_component(newical);
     icalcomponent_kind kind = icalcomponent_isa(comp);
 
-    int do_send = has_changed_attendee;
+    int do_send = 0;
 
     for (; comp; comp = icalcomponent_get_next_component(newical, kind)) {
         icalproperty *prop =
@@ -2026,7 +2025,7 @@ static void schedule_full_update(const char *cal_ownerid, const char *sched_user
     icalcomponent_add_component(itip, mastercopy);
 
     int do_send = force_send;
-    unsigned flags = 0;
+    unsigned flags = force_send ? SCHEDFLAG_IS_UPDATE : 0;
 
     icalcomponent *oldmaster = find_attended_component(oldical, "", attendee);
     if (check_changes(oldmaster, mastercopy, attendee)) {
@@ -2101,8 +2100,7 @@ static void schedule_full_update(const char *cal_ownerid, const char *sched_user
     else {
         /* just look for sub updates */
         schedule_sub_updates(cal_ownerid, sched_userid, schedule_addresses,
-                             organizer, attendee, h_cutoff, oldical, newical, mech,
-                             force_send);
+                             organizer, attendee, h_cutoff, oldical, newical, mech);
     }
 
     icalcomponent_free(itip);
@@ -2143,8 +2141,7 @@ extern void schedule_one_attendee(const char *cal_ownerid, const char *sched_use
 
     schedule_sub_updates(cal_ownerid, sched_userid, schedule_addresses,
                          organizer, attendee,
-                         h_cutoff, oldical, newical, mech,
-                         has_changed_attendee);
+                         h_cutoff, oldical, newical, mech);
 }
 
 static int has_attach(icalcomponent *ical)
