@@ -1474,7 +1474,8 @@ static void add_attendees(icalcomponent *ical,
                           const char *organizer,
                           int hide_attendees,
                           hash_table *attendees,
-                          int *has_new_attendee)
+                          strarray_t *old_attendee_keys,
+                          int *has_changed_attendee)
 {
     if (!ical) return;
 
@@ -1512,8 +1513,12 @@ static void add_attendees(icalcomponent *ical,
             if (!bycomp) {
                 bycomp = dynarray_new(sizeof(struct comp_attendee));
                 hash_insert(attendee, bycomp, attendees);
-                if (has_new_attendee)
-                    *has_new_attendee = 1;
+                if (has_changed_attendee)
+                    *has_changed_attendee = 1;
+            }
+            if (old_attendee_keys) {
+                int idx = strarray_find(old_attendee_keys, attendee, 0);
+                if (idx >= 0) strarray_remove(old_attendee_keys, idx);
             }
             struct comp_attendee ca = { comp, prop };
             dynarray_append(bycomp, &ca);
@@ -1918,7 +1923,7 @@ static void schedule_sub_updates(const char *cal_ownerid, const char *sched_user
                                  icaltimetype h_cutoff,
                                  icalcomponent *oldical, icalcomponent *newical,
                                  enum sched_mechanism mech,
-                                 int has_new_attendee)
+                                 int has_changed_attendee)
 {
     if (!newical) return;
 
@@ -1932,7 +1937,7 @@ static void schedule_sub_updates(const char *cal_ownerid, const char *sched_user
     icalcomponent *comp = icalcomponent_get_first_real_component(newical);
     icalcomponent_kind kind = icalcomponent_isa(comp);
 
-    int do_send = has_new_attendee;
+    int do_send = has_changed_attendee;
 
     for (; comp; comp = icalcomponent_get_next_component(newical, kind)) {
         icalproperty *prop =
@@ -2111,7 +2116,7 @@ extern void schedule_one_attendee(const char *cal_ownerid, const char *sched_use
                                   icaltimetype h_cutoff,
                                   icalcomponent *oldical, icalcomponent *newical,
                                   enum sched_mechanism mech,
-                                  int has_new_attendee)
+                                  int has_changed_attendee)
 {
     /* case: this attendee is attending the master event */
     icalcomponent *mastercomp;
@@ -2119,7 +2124,7 @@ extern void schedule_one_attendee(const char *cal_ownerid, const char *sched_use
         schedule_full_update(cal_ownerid, sched_userid, schedule_addresses,
                              organizer, attendee,
                              mastercomp, h_cutoff, oldical, newical, mech,
-                             has_new_attendee);
+                             has_changed_attendee);
         return;
     }
 
@@ -2139,7 +2144,7 @@ extern void schedule_one_attendee(const char *cal_ownerid, const char *sched_use
     schedule_sub_updates(cal_ownerid, sched_userid, schedule_addresses,
                          organizer, attendee,
                          h_cutoff, oldical, newical, mech,
-                         has_new_attendee);
+                         has_changed_attendee);
 }
 
 static int has_attach(icalcomponent *ical)
@@ -2457,10 +2462,14 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
     hash_table attendees = HASH_TABLE_INITIALIZER;
     construct_hash_table(&attendees,
             count_attendees(oldical) + count_attendees(newical) + 1, 0);
-    add_attendees(oldical, organizer, hide_attendees, &attendees, NULL);
+    add_attendees(oldical, organizer, hide_attendees, &attendees, NULL, NULL);
+    strarray_t *old_attendee_keys = hash_keys(&attendees);
 
-    int has_new_attendee = 0;
-    add_attendees(newical, organizer, hide_attendees, &attendees, &has_new_attendee);
+    int has_changed_attendee = 0;
+    add_attendees(newical, organizer, hide_attendees, &attendees, old_attendee_keys, &has_changed_attendee);
+    if (strarray_size(old_attendee_keys) > 0) {
+        has_changed_attendee = 1; //has deleted attendee
+    }
 
     icaltimetype h_cutoff = caldav_get_historical_cutoff();
 
@@ -2483,7 +2492,7 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
         schedule_one_attendee(cal_ownerid, sched_userid, schedule_addresses,
                               organizer, attendee,
                               h_cutoff, oldical, newical, mech,
-                              has_new_attendee);
+                              has_changed_attendee);
 
         if (hide_attendees) {
             /* Remove and free attendee */
