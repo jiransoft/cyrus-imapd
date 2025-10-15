@@ -1504,6 +1504,7 @@ static void add_attendees(icalcomponent *ical,
                           const char *organizer,
                           int hide_attendees,
                           hash_table *attendees,
+                          strarray_t *old_attendee_keys,
 						  int *has_new_attendee)
 {
     if (!ical) return;
@@ -1552,6 +1553,10 @@ static void add_attendees(icalcomponent *ical,
 
             if (hide_attendees)
                 icalcomponent_remove_property(comp, prop);
+
+            if (old_attendee_keys) {
+                strarray_remove_all_case(old_attendee_keys, attendee);
+            }
         }
     }
 }
@@ -1948,7 +1953,7 @@ icalparameter_scheduleforcesend get_forcesend(icalproperty *prop)
 static void schedule_sub_updates(const char *userid, const strarray_t *schedule_addresses,
                                  const char *organizer, const char *attendee,
                                  icaltimetype h_cutoff,
-                                 icalcomponent *oldical, icalcomponent *newical, int has_new_attendee)
+                                 icalcomponent *oldical, icalcomponent *newical, int has_changed_attendee)
 {
     if (!newical) return;
 
@@ -1962,7 +1967,7 @@ static void schedule_sub_updates(const char *userid, const strarray_t *schedule_
     icalcomponent *comp = icalcomponent_get_first_real_component(newical);
     icalcomponent_kind kind = icalcomponent_isa(comp);
 
-    int do_send = has_new_attendee;
+    int do_send = has_changed_attendee;
 
     for (; comp; comp = icalcomponent_get_next_component(newical, kind)) {
         icalproperty *prop =
@@ -2025,7 +2030,7 @@ static void schedule_sub_updates(const char *userid, const strarray_t *schedule_
 static void schedule_full_update(const char *userid, const strarray_t *schedule_addresses,
                                  const char *organizer, const char *attendee,
                                  icalcomponent *mastercomp, icaltimetype h_cutoff,
-                                 icalcomponent *oldical, icalcomponent *newical, int has_new_attendee)
+                                 icalcomponent *oldical, icalcomponent *newical, int has_changed_attendee)
 {
     /* create an itip for the complete event */
     icalcomponent *itip = make_itip(ICAL_METHOD_REQUEST, newical);
@@ -2034,7 +2039,7 @@ static void schedule_full_update(const char *userid, const strarray_t *schedule_
     clean_component(mastercopy);
     icalcomponent_add_component(itip, mastercopy);
 
-    int do_send = has_new_attendee;
+    int do_send = has_changed_attendee;
     unsigned flags = 0;
 
     icalcomponent *oldmaster = find_attended_component(oldical, "", attendee);
@@ -2108,7 +2113,7 @@ static void schedule_full_update(const char *userid, const strarray_t *schedule_
     }
     else {
         /* just look for sub updates */
-        schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, has_new_attendee);
+        schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, has_changed_attendee);
     }
 
     icalcomponent_free(itip);
@@ -2119,13 +2124,13 @@ static void schedule_full_update(const char *userid, const strarray_t *schedule_
 static void schedule_one_attendee(const char *userid, const strarray_t *schedule_addresses,
                                   const char *organizer, const char *attendee,
                                   icaltimetype h_cutoff,
-                                  icalcomponent *oldical, icalcomponent *newical, int has_new_attendee)
+                                  icalcomponent *oldical, icalcomponent *newical, int has_changed_attendee)
 {
     /* case: this attendee is attending the master event */
     icalcomponent *mastercomp;
     if ((mastercomp = find_attended_component(newical, "", attendee))) {
         schedule_full_update(userid, schedule_addresses, organizer, attendee,
-                             mastercomp, h_cutoff, oldical, newical, has_new_attendee);
+                             mastercomp, h_cutoff, oldical, newical, has_changed_attendee);
         return;
     }
 
@@ -2138,7 +2143,7 @@ static void schedule_one_attendee(const char *userid, const strarray_t *schedule
         schedule_sub_cancels(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical);
     }
 
-    schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, has_new_attendee);
+    schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, has_changed_attendee);
 }
 
 static int has_attach(icalcomponent *ical)
@@ -2453,10 +2458,14 @@ void sched_request(const char *userid, const strarray_t *schedule_addresses,
     hash_table attendees = HASH_TABLE_INITIALIZER;
     construct_hash_table(&attendees,
             count_attendees(oldical) + count_attendees(newical) + 1, 0);
-    add_attendees(oldical, organizer, hide_attendees, &attendees, NULL);
-
-	int has_new_attendee = 0;
-    add_attendees(newical, organizer, hide_attendees, &attendees, &has_new_attendee);
+    add_attendees(oldical, organizer, hide_attendees, &attendees, NULL, NULL);
+    strarray_t *old_attendee_keys = hash_keys(&attendees);
+    
+	int has_changed_attendee = 0;
+    add_attendees(newical, organizer, hide_attendees, &attendees, old_attendee_keys, &has_changed_attendee);
+    if (strarray_size(old_attendee_keys) > 0) {
+        has_changed_attendee = 1; //has deleted attendee
+    }
 
     icaltimetype h_cutoff = get_historical_cutoff();
 
@@ -2477,7 +2486,7 @@ void sched_request(const char *userid, const strarray_t *schedule_addresses,
         syslog(LOG_NOTICE, "iTIP scheduling request from %s to %s",
                organizer, attendee);
         schedule_one_attendee(userid, schedule_addresses, organizer, attendee,
-                h_cutoff, oldical, newical, has_new_attendee);
+                h_cutoff, oldical, newical, has_changed_attendee);
 
         if (hide_attendees) {
             /* Remove and free attendee */
