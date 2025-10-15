@@ -1953,7 +1953,7 @@ icalparameter_scheduleforcesend get_forcesend(icalproperty *prop)
 static void schedule_sub_updates(const char *userid, const strarray_t *schedule_addresses,
                                  const char *organizer, const char *attendee,
                                  icaltimetype h_cutoff,
-                                 icalcomponent *oldical, icalcomponent *newical, int has_changed_attendee)
+                                 icalcomponent *oldical, icalcomponent *newical)
 {
     if (!newical) return;
 
@@ -1967,7 +1967,7 @@ static void schedule_sub_updates(const char *userid, const strarray_t *schedule_
     icalcomponent *comp = icalcomponent_get_first_real_component(newical);
     icalcomponent_kind kind = icalcomponent_isa(comp);
 
-    int do_send = has_changed_attendee;
+    int do_send = 0;
 
     for (; comp; comp = icalcomponent_get_next_component(newical, kind)) {
         icalproperty *prop =
@@ -2040,7 +2040,7 @@ static void schedule_full_update(const char *userid, const strarray_t *schedule_
     icalcomponent_add_component(itip, mastercopy);
 
     int do_send = has_changed_attendee;
-    unsigned flags = 0;
+    unsigned flags = has_changed_attendee ? SCHEDFLAG_IS_UPDATE : 0;
 
     icalcomponent *oldmaster = find_attended_component(oldical, "", attendee);
     if (check_changes(oldmaster, mastercopy, attendee)) {
@@ -2113,7 +2113,7 @@ static void schedule_full_update(const char *userid, const strarray_t *schedule_
     }
     else {
         /* just look for sub updates */
-        schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, has_changed_attendee);
+        schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical);
     }
 
     icalcomponent_free(itip);
@@ -2143,7 +2143,7 @@ static void schedule_one_attendee(const char *userid, const strarray_t *schedule
         schedule_sub_cancels(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical);
     }
 
-    schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical, has_changed_attendee);
+    schedule_sub_updates(userid, schedule_addresses, organizer, attendee, h_cutoff, oldical, newical);
 }
 
 static int has_attach(icalcomponent *ical)
