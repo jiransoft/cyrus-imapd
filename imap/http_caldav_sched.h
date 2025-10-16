@@ -136,8 +136,7 @@ extern void schedule_one_attendee(const char *cal_ownerid, const char *sched_use
                                   const char *organizer, const char *attendee,
                                   icaltimetype h_cutoff,
                                   icalcomponent *oldical, icalcomponent *newical,
-                                  enum sched_mechanism mech,
-                                  int has_changed_attendee);
+                                  enum sched_mechanism mech);
 
 extern void sched_request(const char *cal_ownerid, const char *sched_userid,
                           const strarray_t *schedule_addresses,

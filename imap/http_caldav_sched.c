@@ -1470,12 +1470,59 @@ struct comp_attendee {
  * Process all attendees in the given component and add them
  * to the request data
  */
+static void add_attendees_in_component(icalcomponent *comp,
+                                       const char *organizer,
+                                       int hide_attendees,
+                                       hash_table *attendees,
+                                       strarray_t *old_attendee_keys,
+                                       int *has_new_attendee)
+{
+    if (!comp) return;
+
+    icalproperty *prop, *nextprop;
+    icalparameter *param;
+    for (prop = icalcomponent_get_first_invitee(comp);
+        prop; prop = nextprop) {
+
+        nextprop = icalcomponent_get_next_invitee(comp);
+
+        const char *attendee = icalproperty_get_decoded_calendaraddress(prop);
+        if (!attendee) continue;
+
+        /* Skip where attendee == organizer */
+        if (!strcasecmp(attendee, organizer)) continue;
+
+        /* Skip where not the server's responsibility */
+        param = icalproperty_get_scheduleagent_parameter(prop);
+        if (param) {
+            icalparameter_scheduleagent agent =
+                icalparameter_get_scheduleagent(param);
+            if (agent != ICAL_SCHEDULEAGENT_SERVER) continue;
+        }
+
+        dynarray_t *bycomp = hash_lookup(attendee, attendees);
+        if (!bycomp) {
+            bycomp = dynarray_new(sizeof(struct comp_attendee));
+            hash_insert(attendee, bycomp, attendees);
+            if (has_new_attendee)
+                *has_new_attendee = 1;
+        }
+        struct comp_attendee ca = { comp, prop };
+        dynarray_append(bycomp, &ca);
+
+        if (hide_attendees)
+            icalcomponent_remove_property(comp, prop);
+
+        if (old_attendee_keys) {
+            strarray_remove_all_case(old_attendee_keys, attendee);
+        }
+    }
+}
+
 static void add_attendees(icalcomponent *ical,
                           const char *organizer,
                           int hide_attendees,
-                          hash_table *attendees,
-                          strarray_t *old_attendee_keys,
-                          int *has_changed_attendee)
+                          hash_table *attendees)
 {
     if (!ical) return;
 
@@ -1488,45 +1535,21 @@ static void add_attendees(icalcomponent *ical,
     icalcomponent_kind kind = icalcomponent_isa(comp);
 
     for (; comp; comp = icalcomponent_get_next_component(ical, kind)) {
-        icalproperty *prop, *nextprop;
-        icalparameter *param;
-        for (prop = icalcomponent_get_first_invitee(comp);
-            prop; prop = nextprop) {
-
-            nextprop = icalcomponent_get_next_invitee(comp);
-
-            const char *attendee = icalproperty_get_decoded_calendaraddress(prop);
-            if (!attendee) continue;
-
-            /* Skip where attendee == organizer */
-            if (!strcasecmp(attendee, organizer)) continue;
-
-            /* Skip where not the server's responsibility */
-            param = icalproperty_get_scheduleagent_parameter(prop);
-            if (param) {
-                icalparameter_scheduleagent agent =
-                    icalparameter_get_scheduleagent(param);
-                if (agent != ICAL_SCHEDULEAGENT_SERVER) continue;
-            }
-
-            dynarray_t *bycomp = hash_lookup(attendee, attendees);
-            if (!bycomp) {
-                bycomp = dynarray_new(sizeof(struct comp_attendee));
-                hash_insert(attendee, bycomp, attendees);
-                if (has_changed_attendee)
-                    *has_changed_attendee = 1;
-            }
-            if (old_attendee_keys) {
-                int idx = strarray_find(old_attendee_keys, attendee, 0);
-                if (idx >= 0) strarray_remove(old_attendee_keys, idx);
-            }
-            struct comp_attendee ca = { comp, prop };
-            dynarray_append(bycomp, &ca);
-
-            if (hide_attendees)
-                icalcomponent_remove_property(comp, prop);
-        }
+        add_attendees_in_component(comp, organizer, hide_attendees, attendees, NULL, NULL);
     }
+}
+
+static size_t count_attendees_in_component(icalcomponent *comp)
+{
+    if (!comp) return 0;
+
+    size_t count = 0;
+    icalproperty *prop;
+    for (prop = icalcomponent_get_first_invitee(comp);
+         prop; prop = icalcomponent_get_next_invitee(comp)) {
+        count++;
+    }
+    return count;
 }
 
 /*
@@ -1544,11 +1567,7 @@ static size_t count_attendees(icalcomponent *ical)
     icalcomponent *comp = icalcomponent_get_first_real_component(ical);
     icalcomponent_kind kind = icalcomponent_isa(comp);
     for (; comp; comp = icalcomponent_get_next_component(ical, kind)) {
-        icalproperty *prop;
-        for (prop = icalcomponent_get_first_invitee(comp);
-                prop; prop = icalcomponent_get_next_invitee(comp)) {
-            count++;
-        }
+        count += count_attendees_in_component(comp);
     }
 
     return count;
@@ -1600,6 +1619,25 @@ static int has_exdate(icalcomponent *ical, struct icaltimetype test)
     }
 
     return 0;
+}
+
+static int check_changes_attendees(icalcomponent *old, icalcomponent *comp, const char *organizer)
+{
+    if (!old) return 0;
+
+    hash_table attendees = HASH_TABLE_INITIALIZER;
+    construct_hash_table(&attendees,
+                          count_attendees_in_component(old) + count_attendees_in_component(comp) + 1, 0);
+    add_attendees_in_component(old, organizer, 0, &attendees, NULL, NULL);
+    strarray_t *old_attendee_keys = hash_keys(&attendees);
+
+    int has_changed_attendee = 0;
+    add_attendees_in_component(comp, organizer, 0, &attendees, old_attendee_keys, &has_changed_attendee);
+    has_changed_attendee |= strarray_size(old_attendee_keys) > 0;
+
+    strarray_free(old_attendee_keys);
+    free_hash_table(&attendees, NULL);
+    return has_changed_attendee;
 }
 
 static int check_changes_any(icalcomponent *old,
@@ -1960,7 +1998,8 @@ static void schedule_sub_updates(const char *cal_ownerid, const char *sched_user
         }
 
         /* unchanged event - we don't need to send anything */
-        if (!check_changes(oldcomp, comp, attendee)) {
+        if (!check_changes(oldcomp, comp, attendee)
+            && !check_changes_attendees(oldcomp, comp, organizer)) {
             if (force_send == ICAL_SCHEDULEFORCESEND_NONE) {
                 syslog(LOG_INFO,
                        "Not sending iTIP request for attendee %s (event %s):"
@@ -2014,8 +2053,7 @@ static void schedule_full_update(const char *cal_ownerid, const char *sched_user
                                  const char *organizer, const char *attendee,
                                  icalcomponent *mastercomp, icaltimetype h_cutoff,
                                  icalcomponent *oldical, icalcomponent *newical,
-                                 enum sched_mechanism mech,
-                                 int force_send)
+                                 enum sched_mechanism mech)
 {
     /* create an itip for the complete event */
     icalcomponent *itip = make_itip(ICAL_METHOD_REQUEST, newical);
@@ -2024,11 +2062,12 @@ static void schedule_full_update(const char *cal_ownerid, const char *sched_user
     clean_component(mastercopy);
     icalcomponent_add_component(itip, mastercopy);
 
-    int do_send = force_send;
-    unsigned flags = force_send ? SCHEDFLAG_IS_UPDATE : 0;
+    int do_send = 0;
+    unsigned flags = 0;
 
     icalcomponent *oldmaster = find_attended_component(oldical, "", attendee);
-    if (check_changes(oldmaster, mastercopy, attendee)) {
+    if (check_changes(oldmaster, mastercopy, attendee)
+        || check_changes_attendees(oldmaster, mastercopy, organizer)) {
         /* we only force the send if the top level event has changed */
         if (!icalcomponent_is_historical(mastercopy, h_cutoff)) do_send = 1;
 
@@ -2113,16 +2152,14 @@ extern void schedule_one_attendee(const char *cal_ownerid, const char *sched_use
                                   const char *organizer, const char *attendee,
                                   icaltimetype h_cutoff,
                                   icalcomponent *oldical, icalcomponent *newical,
-                                  enum sched_mechanism mech,
-                                  int has_changed_attendee)
+                                  enum sched_mechanism mech)
 {
     /* case: this attendee is attending the master event */
     icalcomponent *mastercomp;
     if ((mastercomp = find_attended_component(newical, "", attendee))) {
         schedule_full_update(cal_ownerid, sched_userid, schedule_addresses,
                              organizer, attendee,
-                             mastercomp, h_cutoff, oldical, newical, mech,
-                             has_changed_attendee);
+                             mastercomp, h_cutoff, oldical, newical, mech);
         return;
     }
 
@@ -2459,14 +2496,8 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
     hash_table attendees = HASH_TABLE_INITIALIZER;
     construct_hash_table(&attendees,
             count_attendees(oldical) + count_attendees(newical) + 1, 0);
-    add_attendees(oldical, organizer, hide_attendees, &attendees, NULL, NULL);
-    strarray_t *old_attendee_keys = hash_keys(&attendees);
-
-    int has_changed_attendee = 0;
-    add_attendees(newical, organizer, hide_attendees, &attendees, old_attendee_keys, &has_changed_attendee);
-    if (strarray_size(old_attendee_keys) > 0) {
-        has_changed_attendee = 1; //has deleted attendee
-    }
+    add_attendees(oldical, organizer, hide_attendees, &attendees);
+    add_attendees(newical, organizer, hide_attendees, &attendees);
 
     icaltimetype h_cutoff = caldav_get_historical_cutoff();
 
@@ -2488,8 +2519,7 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
                organizer, attendee);
         schedule_one_attendee(cal_ownerid, sched_userid, schedule_addresses,
                               organizer, attendee,
-                              h_cutoff, oldical, newical, mech,
-                              has_changed_attendee);
+                              h_cutoff, oldical, newical, mech);
 
         if (hide_attendees) {
             /* Remove and free attendee */

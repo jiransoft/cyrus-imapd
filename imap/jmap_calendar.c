@@ -8231,7 +8231,7 @@ static int jmap_calendarevent_participantreply(struct jmap_req *req)
     schedule_one_attendee(req->accountid, req->accountid, NULL, organizer,
                           part_email, caldav_get_historical_cutoff(),
                           update.oldical, update.newical,
-                          SCHED_MECH_JMAP_PARTREPLY, 0);
+                          SCHED_MECH_JMAP_PARTREPLY);
 
 no_op:
     /* Build response */
