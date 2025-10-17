@@ -1,0 +1,158 @@
+#!perl
+use Cassandane::Tiny;
+
+sub test_email_import_allowduplicate
+    :min_version_3_1 :needs_component_sieve :needs_component_jmap
+{
+    my ($self) = @_;
+    my $jmap = $self->{jmap};
+
+    my $store = $self->{store};
+    my $talk = $store->get_client();
+
+    my $inbox = $self->getinbox()->{id};
+    $self->assert_not_null($inbox);
+
+    # Generate an embedded email to get a blob id
+    xlog $self, "Generate an email in INBOX via IMAP";
+    $self->make_message("foo",
+        mime_type => "multipart/mixed",
+        mime_boundary => "sub",
+        body => ""
+          . "--sub\r\n"
+          . "Content-Type: text/plain; charset=UTF-8\r\n"
+          . "Content-Disposition: inline\r\n" . "\r\n"
+          . "some text"
+          . "\r\n--sub\r\n"
+          . "Content-Type: message/rfc822\r\n"
+          . "\r\n"
+          . "Return-Path: <Ava.Nguyen\@local>\r\n"
+          . "Mime-Version: 1.0\r\n"
+          . "Content-Type: text/plain\r\n"
+          . "Content-Transfer-Encoding: 7bit\r\n"
+          . "Subject: bar\r\n"
+          . "From: Ava T. Nguyen <Ava.Nguyen\@local>\r\n"
+          . "Message-ID: <fake.1475639947.6507\@local>\r\n"
+          . "Date: Wed, 05 Oct 2016 14:59:07 +1100\r\n"
+          . "To: Test User <test\@local>\r\n"
+          . "\r\n"
+          . "An embedded email"
+          . "\r\n--sub--\r\n",
+    ) || die;
+
+    xlog $self, "get blobId";
+    my $res = $jmap->CallMethods([
+        ['Email/query', { }, "R1"],
+        ['Email/get', {
+            '#ids' => { resultOf => 'R1', name => 'Email/query', path => '/ids' },
+            properties => ['attachments'],
+        }, 'R2' ],
+    ]);
+    my $blobid = $res->[1][1]->{list}[0]->{attachments}[0]{blobId};
+    $self->assert_not_null($blobid);
+
+    xlog $self, "create drafts mailbox";
+    $res = $jmap->CallMethods([
+            ['Mailbox/set', { create => { "1" => {
+                            name => "drafts",
+                            parentId => undef,
+                            role => "drafts"
+             }}}, "R1"]
+    ]);
+    my $drafts = $res->[0][1]{created}{"1"}{id};
+    $self->assert_not_null($drafts);
+
+    xlog $self, "import first email from blob $blobid";
+    $res = $jmap->CallMethods([['Email/import', {
+        emails => {
+            "1" => {
+                blobId => $blobid,
+                mailboxIds => {$drafts =>  JSON::true},
+                keywords => { '$draft' => JSON::true },
+            },
+        },
+    }, "R1"]]);
+
+    $self->assert_str_equals("Email/import", $res->[0][0]);
+    my $msg1 = $res->[0][1]->{created}{"1"};
+    $self->assert_not_null($msg1);
+    my $emailId1 = $msg1->{id};
+
+    xlog $self, "import same email without allowDuplicate (expect alreadyExists error)";
+    $res = $jmap->CallMethods([['Email/import', {
+        emails => {
+            "1" => {
+                blobId => $blobid,
+                mailboxIds => {$drafts =>  JSON::true},
+                keywords => { '$draft' => JSON::true },
+            },
+        },
+    }, "R1"]]);
+    $self->assert_str_equals("Email/import", $res->[0][0]);
+    $self->assert_str_equals("alreadyExists", $res->[0][1]->{notCreated}{"1"}{type});
+    $self->assert_str_equals($emailId1, $res->[0][1]->{notCreated}{"1"}{existingId});
+
+    xlog $self, "import same email with allowDuplicate: true (expect success)";
+    $res = $jmap->CallMethods([['Email/import', {
+        emails => {
+            "2" => {
+                blobId => $blobid,
+                mailboxIds => {$drafts =>  JSON::true},
+                keywords => { '$draft' => JSON::true },
+                allowDuplicate => JSON::true,
+            },
+        },
+    }, "R1"]]);
+
+    $self->assert_str_equals("Email/import", $res->[0][0]);
+    my $msg2 = $res->[0][1]->{created}{"2"};
+    $self->assert_not_null($msg2);
+    my $emailId2 = $msg2->{id};
+
+    xlog $self, "verify that two emails have different IDs";
+    $self->assert_str_not_equals($emailId1, $emailId2);
+
+    xlog $self, "import same email again with allowDuplicate: true (expect another success)";
+    $res = $jmap->CallMethods([['Email/import', {
+        emails => {
+            "3" => {
+                blobId => $blobid,
+                mailboxIds => {$drafts =>  JSON::true},
+                keywords => { '$draft' => JSON::true },
+                allowDuplicate => JSON::true,
+            },
+        },
+    }, "R1"]]);
+
+    $self->assert_str_equals("Email/import", $res->[0][0]);
+    my $msg3 = $res->[0][1]->{created}{"3"};
+    $self->assert_not_null($msg3);
+    my $emailId3 = $msg3->{id};
+
+    xlog $self, "verify all three emails have different IDs";
+    $self->assert_str_not_equals($emailId1, $emailId3);
+    $self->assert_str_not_equals($emailId2, $emailId3);
+
+    xlog $self, "query all emails in drafts";
+    $res = $jmap->CallMethods([['Email/query', {
+        filter => { inMailbox => $drafts },
+    }, "R1"]]);
+
+    xlog $self, "verify we have 3 emails in drafts";
+    $self->assert_num_equals(3, scalar @{$res->[0][1]->{ids}});
+
+    xlog $self, "get all three emails to verify content";
+    $res = $jmap->CallMethods([['Email/get', {
+        ids => [$emailId1, $emailId2, $emailId3],
+        properties => ['subject', 'from', 'mailboxIds'],
+    }, "R1"]]);
+
+    $self->assert_num_equals(3, scalar @{$res->[0][1]->{list}});
+
+    xlog $self, "verify all have same subject (same content)";
+    my $subject1 = $res->[0][1]->{list}[0]->{subject};
+    my $subject2 = $res->[0][1]->{list}[1]->{subject};
+    my $subject3 = $res->[0][1]->{list}[2]->{subject};
+    $self->assert_str_equals($subject1, $subject2);
+    $self->assert_str_equals($subject2, $subject3);
+}

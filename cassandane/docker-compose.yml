@@ -1,0 +1,38 @@
+services:
+  cyrus-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cyrus-imapd-dev
+    user: "1000:1000"  # Run as cyrus user
+    volumes:
+      # Mount the entire cyrus-imapd source directory
+      - ../:/srv/cyrus-imapd
+      # Mount cassandane directory
+      - ./:/srv/cyrus-imapd/cassandane
+      # Mount /tmp/cass for test instance access
+      - ./tmp-cass:/tmp/cass
+    working_dir: /srv/cyrus-imapd
+    tty: true
+    stdin_open: true
+    environment:
+      # Cassandane configuration
+      - CASSINI_CASSANDANE_ROOTDIR=/tmp/cass
+      - CASSINI_CASSANDANE_CLEANUP=no
+      # Test2 configuration
+      - TMPDIR=/tmp
+      - HOME=/home/cyrus
+      - USER=cyrus
+      # Perl environment
+      - PERL5LIB=/srv/cyrus-imapd/cassandane
+    networks:
+      - cyrus-network
+
+networks:
+  cyrus-network:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+        - subnet: fd00::/80
