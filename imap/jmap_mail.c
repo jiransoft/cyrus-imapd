@@ -52,6 +52,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 
 #include <sasl/saslutil.h>
 
@@ -9123,10 +9124,38 @@ static void _email_append(jmap_req_t *req,
     if (r) goto done;
 
     if (sourcefile) {
-        if (!(f = append_newstage_full(mailbox_name(mbox), internaldate, 0, &stage, sourcefile))) {
-            syslog(LOG_ERR, "append_newstage(%s) failed", mailbox_name(mbox));
-            r = HTTP_SERVER_ERROR;
-            goto done;
+        /* If allowDuplicate is true, create file with unique header first */
+        if (allow_duplicate) {
+            if (!(f = append_newstage(mailbox_name(mbox), internaldate, 0, &stage))) {
+                syslog(LOG_ERR, "append_newstage(%s) failed", mailbox_name(mbox));
+                r = HTTP_SERVER_ERROR;
+                goto done;
+            }
+
+            /* Write unique header */
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            fprintf(f, "X-Cyrus-Jmap-Import-Id: %ld.%06ld.%d\r\n",
+                    (long)tv.tv_sec, (long)tv.tv_usec, getpid());
+
+            /* Append source file content */
+            FILE *src = fopen(sourcefile, "r");
+            if (src) {
+                char buf[8192];
+                size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
+                    fwrite(buf, 1, n, f);
+                }
+                fclose(src);
+            }
+        }
+        else {
+            /* Normal case without header modification */
+            if (!(f = append_newstage_full(mailbox_name(mbox), internaldate, 0, &stage, sourcefile))) {
+                syslog(LOG_ERR, "append_newstage(%s) failed", mailbox_name(mbox));
+                r = HTTP_SERVER_ERROR;
+                goto done;
+            }
         }
     }
     else {
