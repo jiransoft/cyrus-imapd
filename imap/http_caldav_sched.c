@@ -1840,8 +1840,8 @@ static void schedule_full_cancel(const char *cal_ownerid, const char *sched_user
                                  icalcomponent *oldical, icalcomponent *newical,
                                  enum sched_mechanism mech)
 {
-    /* we need to send a cancel for all recurrences with this attendee,
-       and add exdates to the master for all without this attendee */
+    /* When the attendee is removed from the master, send cancel for the
+       entire event rather than processing individual exceptions */
     icalcomponent *itip = make_itip(ICAL_METHOD_CANCEL, oldical);
 
     icalcomponent *mastercopy = icalcomponent_clone(mastercomp);
@@ -1849,52 +1849,33 @@ static void schedule_full_cancel(const char *cal_ownerid, const char *sched_user
     icalcomponent_set_status(mastercopy, ICAL_STATUS_CANCELLED);
     icalcomponent_add_component(itip, mastercopy);
 
-    int do_send = !icalcomponent_is_historical(mastercopy, h_cutoff);
-
-    icalcomponent *comp = icalcomponent_get_first_real_component(oldical);
-    icalcomponent_kind kind = icalcomponent_isa(comp);
-
-    for (; comp; comp = icalcomponent_get_next_component(oldical, kind)) {
-        icalproperty *prop =
-            icalcomponent_get_first_property(comp, ICAL_RECURRENCEID_PROPERTY);
-        if (!prop) continue; /* skip master */
-        const char *recurid = icalproperty_get_value_as_string(prop);
-
-        /* non matching are exdates on the master */
-        if (!find_attendee(comp, attendee)) {
-            schedule_set_exdate(mastercopy, comp);
-            continue;
-        }
-
-        icalcomponent *newcomp =
-            find_attended_component(newical, recurid, attendee);
-        if (newcomp) continue; /* will be scheduled separately */
-
-        icalcomponent *copy = icalcomponent_clone(comp);
-        clean_component(copy);
-        icalcomponent_set_status(copy, ICAL_STATUS_CANCELLED);
-        icalcomponent_add_component(itip, copy);
-
-        if (!do_send && !icalcomponent_is_historical(copy, h_cutoff))
-            do_send = 1;
-    }
-
-    if (do_send) {
-        struct sched_data sched =
-            { mech, 0, itip, oldical, newical,
-              ICAL_SCHEDULEFORCESEND_NONE, schedule_addresses, NULL, NULL };
-        sched_deliver(cal_ownerid, sched_userid,
-                      organizer, attendee, &sched, httpd_authstate);
-    }
+    struct sched_data sched =
+        { mech, 0, itip, oldical, newical,
+          ICAL_SCHEDULEFORCESEND_NONE, schedule_addresses, NULL, "1.0" };
+    sched_deliver(cal_ownerid, sched_userid,
+                  organizer, attendee, &sched, httpd_authstate);
 
     icalcomponent_free(itip);
+}
+
+static int find_exdate(icalcomponent *comp, const char *match)
+{
+    if (!comp) return 0;
+
+    icalproperty *prop = icalcomponent_get_first_property(comp, ICAL_EXDATE_PROPERTY);
+    for (; prop; prop = icalcomponent_get_next_property(comp, ICAL_EXDATE_PROPERTY)) {
+        if (!prop) continue;
+        const char *exdate = icalproperty_get_value_as_string(prop);
+        if (!strcmpsafe(match, exdate)) return 1;
+    }
+    return 0;
 }
 
 /* we've already tested that master does NOT contain this attendee */
 static void schedule_sub_cancels(const char *cal_ownerid, const char *sched_userid,
                                  const strarray_t *schedule_addresses,
                                  const char *organizer, const char *attendee,
-                                 icaltimetype h_cutoff,
+                                 icalcomponent *mastercomp, icaltimetype h_cutoff,
                                  icalcomponent *oldical, icalcomponent *newical,
                                  enum sched_mechanism mech)
 {
@@ -1932,13 +1913,116 @@ static void schedule_sub_cancels(const char *cal_ownerid, const char *sched_user
             do_send = 1;
     }
 
+    icalcomponent *newmaster = NULL;
+    comp = icalcomponent_get_first_real_component(newical);
+    kind = icalcomponent_isa(comp);
+
+    for (; comp; comp = icalcomponent_get_next_component(newical, kind)) {
+        icalproperty *prop =
+            icalcomponent_get_first_property(comp, ICAL_RECURRENCEID_PROPERTY);
+        if (!prop) {
+            newmaster = comp;
+            continue;
+        }
+
+        if (find_attendee(comp, attendee)) continue;
+
+        const char *recurid = icalproperty_get_value_as_string(prop);
+        icalcomponent *oldcomp = find_component(oldical, recurid);
+        if (oldcomp && !find_attendee(oldcomp, attendee)) continue;
+
+        icalcomponent *copy = icalcomponent_clone(comp);
+        clean_component(copy);
+
+        prop = icalcomponent_get_first_property(copy, ICAL_ORGANIZER_PROPERTY);
+        if (!prop) {
+            if (mastercomp) {
+                prop = icalcomponent_get_first_property(mastercomp, ICAL_ORGANIZER_PROPERTY);
+                if (prop) prop = icalproperty_clone(prop);
+            }
+            if (!prop) prop = icalproperty_new_organizer(organizer);
+            icalcomponent_add_property(copy, prop);
+        }
+
+        prop = NULL;
+        if (mastercomp) {
+            prop = find_attendee(mastercomp, attendee);
+            if (prop) prop = icalproperty_clone(prop);
+        }
+        if (!prop) prop = icalproperty_new_attendee(attendee);
+        icalcomponent_add_property(copy, prop);
+
+        icalcomponent_set_status(copy, ICAL_STATUS_CANCELLED);
+        icalcomponent_add_component(itip, copy);
+
+        if (!do_send && !icalcomponent_is_historical(copy, h_cutoff))
+            do_send = 1;
+    }
+
+    if (newmaster) {
+        icalproperty *prop = icalcomponent_get_first_property(newmaster, ICAL_EXDATE_PROPERTY);
+        for (; prop; prop = icalcomponent_get_next_property(newmaster, ICAL_EXDATE_PROPERTY)) {
+            if (!prop) continue;
+            const char *exdate = icalproperty_get_value_as_string(prop);
+            if (!find_exdate(mastercomp, exdate)) {
+                icalcomponent *vevent = icalcomponent_new(ICAL_VEVENT_COMPONENT);
+
+                const char *summary = icalcomponent_get_summary(mastercomp);
+                if (summary)
+                    icalcomponent_set_summary(vevent, summary);
+
+                const char *uid = icalcomponent_get_uid(mastercomp);
+                if (uid) icalcomponent_set_uid(vevent, uid);
+
+                struct icaltimetype old_dt_start = icalcomponent_get_dtstart(mastercomp);
+                struct icaltimetype old_dt_end = icalcomponent_get_dtend(mastercomp);
+                struct icaldurationtype diff = icaltime_subtract(old_dt_end, old_dt_start);
+
+                struct icaltimetype exdate_timetype = icalproperty_get_exdate(prop);
+                icalcomponent_set_dtstart(vevent, exdate_timetype);
+                struct icaltimetype new_dt_end = icaltime_add(exdate_timetype, diff);
+                icalcomponent_set_dtend(vevent, new_dt_end);
+
+                icalproperty *recurrenceid = icalproperty_new_recurrenceid(exdate_timetype);
+                const icaltimezone *tz = icaltime_get_timezone(exdate_timetype);
+                const char *tzid = icaltimezone_get_tzid((icaltimezone *) tz);
+                if (tzid) icalproperty_add_parameter(recurrenceid, icalparameter_new_tzid(tzid));
+                icalcomponent_add_property(vevent, recurrenceid);
+
+                icalproperty *orgprop = NULL;
+                if (mastercomp) {
+                    orgprop = icalcomponent_get_first_property(mastercomp, ICAL_ORGANIZER_PROPERTY);
+                    if (orgprop) orgprop = icalproperty_clone(orgprop);
+                }
+                if (!orgprop) orgprop = icalproperty_new_organizer(organizer);
+                icalcomponent_add_property(vevent, orgprop);
+
+                icalproperty *attprop = NULL;
+                if (mastercomp) {
+                    attprop = find_attendee(mastercomp, attendee);
+                    if (attprop) attprop = icalproperty_clone(attprop);
+                }
+                if (!attprop) attprop = icalproperty_new_attendee(attendee);
+                icalcomponent_add_property(vevent, attprop);
+
+                icalcomponent_set_dtstamp(vevent, icaltime_current_time_with_zone(utc_zone));
+                icalcomponent_set_sequence(vevent, 0);
+
+                icalcomponent_set_status(vevent, ICAL_STATUS_CANCELLED);
+                icalcomponent_add_component(itip, vevent);
+
+                if (!do_send && !icalcomponent_is_historical(vevent, h_cutoff))
+                    do_send = 1;
+            }
+        }
+    }
+
     if (do_send) {
         struct sched_data sched =
             { mech, 0, itip, oldical, newical,
               ICAL_SCHEDULEFORCESEND_NONE, schedule_addresses, NULL, NULL };
         sched_deliver(cal_ownerid, sched_userid,
                       organizer, attendee, &sched, httpd_authstate);
-
     }
 
     icalcomponent_free(itip);
@@ -2155,25 +2239,41 @@ extern void schedule_one_attendee(const char *cal_ownerid, const char *sched_use
                                   enum sched_mechanism mech)
 {
     /* case: this attendee is attending the master event */
-    icalcomponent *mastercomp;
+    icalcomponent *mastercomp, *oldmastercomp;
     if ((mastercomp = find_attended_component(newical, "", attendee))) {
-        schedule_full_update(cal_ownerid, sched_userid, schedule_addresses,
-                             organizer, attendee,
-                             mastercomp, h_cutoff, oldical, newical, mech);
-        return;
+        int full_update = 0;
+        if ((oldmastercomp = find_attended_component(oldical, "", attendee))) {
+            int changes = check_changes(oldmastercomp, mastercomp, attendee);
+            if (changes
+                || check_changes_attendees(oldmastercomp, mastercomp, organizer))
+                full_update = 1;
+        }
+        else {
+            full_update = 1;
+        }
+
+        if (full_update) {
+            schedule_full_update(cal_ownerid, sched_userid, schedule_addresses,
+                                 organizer, attendee,
+                                 mastercomp, h_cutoff, oldical, newical, mech);
+            return;
+        }
+    }
+    else {
+        oldmastercomp = find_attended_component(oldical, "", attendee);
     }
 
     /* otherwise we need to cancel for each sub event and then we'll still
      * send the updates if any */
-    if ((mastercomp = find_attended_component(oldical, "", attendee))) {
+    if (oldmastercomp && !mastercomp) {
         schedule_full_cancel(cal_ownerid, sched_userid, schedule_addresses,
                              organizer, attendee,
-                             mastercomp, h_cutoff, oldical, newical, mech);
+                             oldmastercomp, h_cutoff, oldical, newical, mech);
     }
     else {
         schedule_sub_cancels(cal_ownerid, sched_userid, schedule_addresses,
                              organizer, attendee,
-                             h_cutoff, oldical, newical, mech);
+                             oldmastercomp, h_cutoff, oldical, newical, mech);
     }
 
     schedule_sub_updates(cal_ownerid, sched_userid, schedule_addresses,
