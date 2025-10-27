@@ -307,6 +307,8 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
         prop = icalcomponent_get_first_property(comp, ICAL_ORGANIZER_PROPERTY);
         add_address(&recipients, prop,
                     (const char*(*)(icalproperty *))&icalproperty_get_decoded_calendaraddress);
+
+        comment = icalcomponent_get_comment(comp);
     }
     else {
         if (meth == ICAL_METHOD_CANCEL) {
@@ -429,17 +431,14 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
     buf_appendcstr(&msgbuf, "Content-Type: text/plain; charset=utf-8\r\n");
     buf_appendcstr(&msgbuf, "Content-Disposition: inline\r\n");
 
-    if (descrip) {
+    if (comment) {
+        buf_setcstr(&tmpbuf, comment);
+        buf_replace_all(&tmpbuf, "\n", "\r\n" TEXT_INDENT);
+        buf_printf(&plainbuf, "%s\r\n", buf_cstring(&tmpbuf));
+    } else if (descrip) {
         buf_setcstr(&tmpbuf, descrip);
         buf_replace_all(&tmpbuf, "\n", "\r\n" TEXT_INDENT);
         buf_printf(&plainbuf, "%s\r\n", buf_cstring(&tmpbuf));
-    }
-
-    const char *comment = icalcomponent_get_comment(comp);
-    if (comment) {
-            buf_setcstr(&tmpbuf, comment);
-            buf_replace_all(&tmpbuf, "\n", "\r\n" TEXT_INDENT);
-            buf_printf(&plainbuf, "Comment: %s\r\n", buf_cstring(&tmpbuf));
     }
 
     mimebody = charset_qpencode_mimebody(buf_base(&plainbuf),
@@ -469,7 +468,10 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
     }
     else originator->name = originator->addr;
 
-    if (descrip) {
+    if (comment) {
+        HTMLencode(&tmpbuf, comment);
+        buf_printf(&msgbuf, "%s<p>\r\n", buf_cstring(&tmpbuf));
+    } else if (descrip) {
         HTMLencode(&tmpbuf, descrip);
         buf_printf(&msgbuf, "%s<p>\r\n", buf_cstring(&tmpbuf));
     }
