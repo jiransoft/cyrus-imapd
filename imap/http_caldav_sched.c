@@ -241,7 +241,7 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
     icalproperty *prop;
     icalproperty_method meth;
     icalcomponent_kind kind;
-    const char *uid, *summary, *location, *descrip, *status;
+    const char *uid, *summary, *location, *descrip, *status, *comment = NULL;
     const char *msg_type, *filename;
     struct address_t *recipients = NULL, *originator = NULL, *recip;
     struct icaltimetype start, end;
@@ -269,6 +269,8 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
         prop = icalcomponent_get_first_property(comp, ICAL_ORGANIZER_PROPERTY);
         add_address(&recipients, prop,
                     (const char*(*)(icalproperty *))&icalproperty_get_organizer);
+        
+        comment = icalcomponent_get_comment(comp);
     }
     else {
         if (meth == ICAL_METHOD_CANCEL) {
@@ -392,7 +394,11 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
     buf_appendcstr(&msgbuf, "Content-Disposition: inline\r\n");
 
     buf_printf(&plainbuf, "");
-    if (descrip) {
+    if (comment) {
+        buf_setcstr(&tmpbuf, comment);
+        buf_replace_all(&tmpbuf, "\n", "\r\n" TEXT_INDENT);
+        buf_printf(&plainbuf, "%s\r\n", buf_cstring(&tmpbuf));
+    } else if (descrip) {
         buf_setcstr(&tmpbuf, descrip);
         buf_replace_all(&tmpbuf, "\n", "\r\n" TEXT_INDENT);
         buf_printf(&plainbuf, "%s\r\n", buf_cstring(&tmpbuf));
@@ -462,7 +468,10 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
     }
     else originator->name = originator->addr;
 
-    if (descrip) {
+    if (comment) {
+        HTMLencode(&tmpbuf, comment);
+        buf_printf(&msgbuf, "%s<p>\r\n", buf_cstring(&tmpbuf));
+    } else if (descrip) {
         HTMLencode(&tmpbuf, descrip);
         buf_printf(&msgbuf, "%s<p>\r\n", buf_cstring(&tmpbuf));
     }
