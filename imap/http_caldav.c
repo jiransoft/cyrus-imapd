@@ -7417,11 +7417,21 @@ add_vavailability(struct vavailability_array *vavail, icalcomponent *ical)
     if (!prop || !newav->priority) newav->priority = 10;
 }
 
+const char *inbox_name = ".Inbox";
+const int inbox_name_len = 6; //strlen(inbox_name);
+
 HIDDEN int busytime_add_resource(struct mailbox *mailbox,
                                  struct freebusy_filter *fbfilter,
                                  struct caldav_data *cdata)
 {
     if (!cdata->dav.imap_uid) return 0;
+
+    const char *mbname = mailbox_name(mailbox);
+    const int mbname_len = strlen(mbname);
+    if (mbname_len > inbox_name_len &&
+        strncmp(mbname + mbname_len - inbox_name_len, inbox_name, inbox_name_len) == 0) {
+        return 0;
+    }
 
     /* Perform component filtering */
     if (!(cdata->comp_type &
