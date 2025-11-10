@@ -829,6 +829,8 @@ static int do_action_list(sieve_interp_t *interp,
         case ACTION_KEEP:
             if (!interp->keep)
                 return SIEVE_INTERNAL_ERROR;
+
+	        strarray_cat(a->u.keep.imapflags, imapflags);
             ret = interp->keep(&a->u.keep,
                                interp->interp_context,
                                script_context,
@@ -995,6 +997,22 @@ EXPORTED int sieve_execute_bytecode(sieve_execute_t *exe, sieve_interp_t *interp
         ret = sieve_eval_bc(exe, 0, interp,
                             script_context, message_context, &variables,
                             actions, notify_list, duptrack_list, &errmsg);
+
+        variable_list_t *vl = varlist_select(&variables, "outcome");
+        if (vl) {
+            strarray_t *sa = vl->var;
+            if (sa) {
+                const char *outcome = sa->data[0];
+                if (outcome) {
+                    if (strcasecmp(outcome, "added") == 0) {
+                        strarray_append(&imapflags, "\\outcome_added");
+                    }
+                    else if (strcasecmp(outcome, "updated") == 0) {
+                        strarray_append(&imapflags, "\\outcome_updated");
+                    }
+                }
+            }
+        }
 
         if (ret < 0) {
             ret = do_sieve_error(SIEVE_RUN_ERROR, interp,

@@ -423,6 +423,8 @@ typedef enum _MsgFlags {
     FLAG_DELETED            = (1<<2),
     FLAG_DRAFT              = (1<<3),
     FLAG_SEEN               = (1<<4),
+    FLAG_OUTCOME_ADDED      = (1<<5),
+    FLAG_OUTCOME_UPDATED    = (1<<6),
 } MsgFlags;
 
 /* NOTE: you can only use up to 1<<15 for MsgFlags and down to 1<<16 for
