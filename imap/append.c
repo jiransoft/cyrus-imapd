@@ -848,6 +848,18 @@ static int append_apply_flags(struct appendstate *as,
                 mboxevent_add_flag(mboxevent, flag);
             }
         }
+        else if (!strcasecmp(flag, "\\outcome_added")) {
+            if (as->myrights & ACL_WRITE) {
+                system_flags |= FLAG_OUTCOME_ADDED;
+                mboxevent_add_flag(mboxevent, flag);
+            }
+        }
+        else if (!strcasecmp(flag, "\\outcome_updated")) {
+            if (as->myrights & ACL_WRITE) {
+                system_flags |= FLAG_OUTCOME_UPDATED;
+                mboxevent_add_flag(mboxevent, flag);
+            }
+        }
         else if (as->myrights & ACL_WRITE) {
             r = mailbox_user_flag(as->mailbox, flag, &userflag, 1);
             if (r) goto out;

@@ -6383,6 +6383,10 @@ static int _email_keywords_add_msgrecord(struct email_keywords *keywords,
         _email_keywords_add_keyword(keywords, "$answered");
     if (!read_seendb && system_flags & FLAG_SEEN)
         _email_keywords_add_keyword(keywords, "$seen");
+    if ((system_flags & FLAG_OUTCOME_ADDED))
+        _email_keywords_add_keyword(keywords, "$outcome_added");
+    if ((system_flags & FLAG_OUTCOME_UPDATED))
+        _email_keywords_add_keyword(keywords, "$outcome_updated");
 
     /* Read user flags */
     struct buf buf = BUF_INITIALIZER;
