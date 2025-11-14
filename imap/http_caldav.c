@@ -7797,6 +7797,10 @@ HIDDEN icalcomponent *busytime_to_ical(struct freebusy_filter *fbfilter,
             next_fb->per.duration.days += fb->per.duration.days - overlap.days;
         }
         else {
+            if (isdur != next_isdur) {
+                /* merge same type only */
+                continue;
+            }
             /* Need to use explicit period */
             next_fb->per.end = next_end;
             next_fb->per.duration = icaldurationtype_null_duration();
