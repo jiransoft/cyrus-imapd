@@ -7772,6 +7772,13 @@ HIDDEN icalcomponent *busytime_to_ical(struct freebusy_filter *fbfilter,
         if (fb->type == ICAL_FBTYPE_NONE) continue;
 
         isdur = !icaldurationtype_is_null_duration(fb->per.duration);
+        next_isdur = !icaldurationtype_is_null_duration(next_fb->per.duration);
+
+        if (isdur != next_isdur) {
+            /* merge same type only */
+            continue;
+        }
+
         end = !isdur ? fb->per.end :
             icaltime_add(fb->per.start, fb->per.duration);
 
@@ -7780,7 +7787,6 @@ HIDDEN icalcomponent *busytime_to_ical(struct freebusy_filter *fbfilter,
             icaltime_compare(end, next_fb->per.start) < 0) continue;
 
         /* Coalesce into next busytime */
-        next_isdur = !icaldurationtype_is_null_duration(next_fb->per.duration);
         next_end = !next_isdur ? next_fb->per.end :
             icaltime_add(next_fb->per.start, next_fb->per.duration);
 
@@ -7797,10 +7803,6 @@ HIDDEN icalcomponent *busytime_to_ical(struct freebusy_filter *fbfilter,
             next_fb->per.duration.days += fb->per.duration.days - overlap.days;
         }
         else {
-            if (isdur != next_isdur) {
-                /* merge same type only */
-                continue;
-            }
             /* Need to use explicit period */
             next_fb->per.end = next_end;
             next_fb->per.duration = icaldurationtype_null_duration();
