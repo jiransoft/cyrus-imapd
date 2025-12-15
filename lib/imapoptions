@@ -2663,6 +2663,11 @@ product version in the capabilities
 .PP
 */
 
+{ "servertiming", 0, SWITCH, "3.8.0" }
+/* If enabled, httpd will emit a Server-Timing response header with
+   timing metrics for each request (cmd, net, total).  This can be used
+   by clients and browser DevTools to visualize server-side performance. */
+
 { "sharedprefix", "Shared Folders", STRING, "2.3.17" }
 /* If using the alternate IMAP namespace, the prefix for the shared
    namespace.  The hierarchy delimiter will be automatically appended.
