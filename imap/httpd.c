@@ -2676,26 +2676,49 @@ EXPORTED void list_auth_schemes(struct transaction_t *txn)
     }
 }
 
+static void allow_hdr_append_meth(struct buf *buf, int *need_sep, const char *s)
+{
+    if (*need_sep) buf_appendcstr(buf, ", ");
+    buf_appendcstr(buf, s);
+    *need_sep = 1;
+}
+
 EXPORTED void allow_hdr(struct transaction_t *txn,
                         const char *name, unsigned allow)
 {
+    struct buf buf = BUF_INITIALIZER;
     const char *meths[] = {
         "OPTIONS, GET, HEAD", "POST", "PUT",
         "PATCH", "DELETE", "TRACE", "CONNECT", NULL
     };
+    int i;
+    int need_sep = 0;
 
-    comma_list_hdr(txn, name, meths, allow);
-
-    if (allow & ALLOW_DAV) {
-        simple_hdr(txn, name, "PROPFIND, REPORT, COPY%s%s%s%s%s",
-                   (allow & ALLOW_DELETE)    ? ", MOVE" : "",
-                   (allow & ALLOW_PROPPATCH) ? ", PROPPATCH" : "",
-                   (allow & ALLOW_MKCOL)     ? ", MKCOL" : "",
-                   (allow & ALLOW_WRITE)     ? ", LOCK, UNLOCK" : "",
-                   (allow & ALLOW_ACL)       ? ", ACL" : "");
-        if ((allow & ALLOW_CAL) && (allow & ALLOW_MKCOL))
-            simple_hdr(txn, name, "MKCALENDAR");
+    /* Add standard HTTP methods */
+    for (i = 0; meths[i]; i++) {
+        if (allow & (1 << i)) {
+            allow_hdr_append_meth(&buf, &need_sep, meths[i]);
+        }
     }
+
+    /* Add DAV methods */
+    if (allow & ALLOW_DAV) {
+        allow_hdr_append_meth(&buf, &need_sep, "PROPFIND, REPORT, COPY");
+        if (allow & ALLOW_DELETE) allow_hdr_append_meth(&buf, &need_sep, "MOVE");
+        if (allow & ALLOW_PROPPATCH) allow_hdr_append_meth(&buf, &need_sep, "PROPPATCH");
+        if (allow & ALLOW_MKCOL)  allow_hdr_append_meth(&buf, &need_sep, "MKCOL");
+        if (allow & ALLOW_WRITE)  allow_hdr_append_meth(&buf, &need_sep, "LOCK, UNLOCK");
+        if (allow & ALLOW_ACL)  allow_hdr_append_meth(&buf, &need_sep, "ACL");
+        if ((allow & ALLOW_CAL) && (allow & ALLOW_MKCOL)) {
+            allow_hdr_append_meth(&buf, &need_sep, "MKCALENDAR");
+        }
+    }
+
+    if (buf_len(&buf)) {
+        simple_hdr(txn, name, "%s", buf_cstring(&buf));
+    }
+
+    buf_free(&buf);
 }
 
 EXPORTED void accept_patch_hdr(struct transaction_t *txn,
@@ -3422,6 +3445,19 @@ EXPORTED void response_header(long code, struct transaction_t *txn)
         spool_enum_hdrcache(resp_body->extra_hdrs, &write_cachehdr, txn);
     }
 
+    /* Server-Timing header for performance metrics (only if configured) */
+    if (config_getswitch(IMAPOPT_SERVERTIMING)) {
+        double cmdtime, nettime;
+        cmdtime_endtimer(&cmdtime, &nettime);
+        if (cmdtime > 0 || nettime > 0) {
+            simple_hdr(txn, "Server-Timing",
+                       "cmd;dur=%.3f, "
+                       "net;dur=%.3f, "
+                       "total;dur=%.3f",
+                       cmdtime * 1000, nettime * 1000,
+                       (cmdtime + nettime) * 1000);
+        }
+    }
 
     /* End of headers */
     txn->conn->end_resp_headers(txn, code);
@@ -4815,7 +4851,7 @@ HIDDEN int meth_connect(struct transaction_t *txn, void *params)
         }
         return ret;
     }
-    
+
     ret = ws_start_channel(txn, cparams->ws.subprotocol, cparams->ws.data_cb);
 
     return (ret == HTTP_UPGRADE) ? HTTP_BAD_REQUEST : ret;
