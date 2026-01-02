@@ -331,7 +331,7 @@ EXPORTED int caldav_get_validators(struct mailbox *mailbox, void *data,
  * user overwrites them in their copy of the resource.
  */
 #define STRIP_OWNER_CAL_DATA              \
-    "CALDATA %(VPATCH {285+}\r\n"         \
+    "CALDATA %(VPATCH {263+}\r\n"         \
     "BEGIN:VPATCH\r\n"                    \
     "VERSION:1\r\n"                       \
     "DTSTAMP:19760401T005545Z\r\n"        \
@@ -339,13 +339,16 @@ EXPORTED int caldav_get_validators(struct mailbox *mailbox, void *data,
     "BEGIN:PATCH\r\n"                     \
     "PATCH-TARGET:/VCALENDAR/ANY\r\n"     \
     "PATCH-DELETE:/VALARM\r\n"            \
-    "PATCH-DELETE:#TRANSP\r\n"            \
     "PATCH-DELETE:#X-MOZ-LASTACK\r\n"     \
     "PATCH-DELETE:#X-MOZ-SNOOZE-TIME\r\n" \
     "PATCH-DELETE:#X-APPLE-DEFAULT-ALARM\r\n" \
     "END:PATCH\r\n"                       \
     "END:VPATCH\r\n)"
 
+/*
+    "CALDATA %(VPATCH {285+}\r\n"         \
+    "PATCH-DELETE:#TRANSP\r\n"            \
+ */
 
 EXPORTED int caldav_is_personalized(struct mailbox *mailbox,
                                     const struct caldav_data *cdata,
@@ -497,8 +500,9 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
                                unsigned *num_changes)
 {
     icalcomponent *comp, *nextcomp, *oldcomp = NULL, *patch = NULL;
-    icalproperty *prop, *nextprop, *oldprop = NULL;
+    icalproperty *prop, *nextprop, *oldprop = NULL, *oldtranspprop = NULL;
     int r;
+    int proceed_transp = 0;
 
     /* Add this component to path */
     size_t path_len = buf_len(path);
@@ -517,6 +521,8 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
     if (oldical) {
         oldprop = icalcomponent_get_first_property(oldical, ICAL_ANY_PROPERTY);
         oldcomp = icalcomponent_get_first_component(oldical, ICAL_ANY_COMPONENT);
+
+        oldtranspprop = icalcomponent_get_first_property(oldical, ICAL_TRANSP_PROPERTY);
     }
 
     for (prop = icalcomponent_get_first_property(ical, ICAL_ANY_PROPERTY);
@@ -643,8 +649,19 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
                         icalcomponent_add_component(vpatch, patch);
                     }
 
-                    icalcomponent_remove_property(ical, prop);
-                    icalcomponent_add_property(patch, prop);
+                    if (oldical) {
+                        icalcomponent_remove_property(ical, prop);
+                        icalcomponent_add_property(patch, prop);
+                        if (kind == ICAL_TRANSP_PROPERTY) {
+                            proceed_transp = 1;
+                            if (oldtranspprop) {
+                                icalcomponent_add_property(ical, icalproperty_clone(oldtranspprop));
+                            }
+                        }
+                    }
+                    else {
+                        icalcomponent_add_property(patch, icalproperty_clone(prop));
+                    }
                 }
                 break;
 
@@ -689,6 +706,22 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
         }
 
         oldprop = icalcomponent_get_next_property(oldical, ICAL_ANY_PROPERTY);
+    }
+
+    if (oldtranspprop && proceed_transp == 0) {
+        icalcomponent_add_property(ical, icalproperty_clone(oldtranspprop));
+         if (vpatch) {
+             /* Add per-user property to VPATCH */
+             if (!patch) {
+                 patch = icalcomponent_vanew(ICAL_XPATCH_COMPONENT,
+                                             icalproperty_new_patchtarget(
+                                                 buf_cstring(path)),
+                                             NULL);
+                 icalcomponent_add_component(vpatch, patch);
+             }
+             icalproperty *inprop = icalproperty_new_transp(ICAL_TRANSP_OPAQUE);
+             icalcomponent_add_property(patch, inprop);
+         }
     }
 
     for (comp = icalcomponent_get_first_component(ical, ICAL_ANY_COMPONENT);
