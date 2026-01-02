@@ -372,8 +372,9 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
                                unsigned *num_changes)
 {
     icalcomponent *comp, *nextcomp, *oldcomp = NULL, *patch = NULL;
-    icalproperty *prop, *nextprop, *oldprop = NULL;
+    icalproperty *prop, *nextprop, *oldprop = NULL, *oldtranspprop = NULL;
     int r;
+    int proceed_transp = 0;
 
     /* Add this component to path */
     size_t path_len = buf_len(path);
@@ -392,6 +393,8 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
     if (oldical) {
         oldprop = icalcomponent_get_first_property(oldical, ICAL_ANY_PROPERTY);
         oldcomp = icalcomponent_get_first_component(oldical, ICAL_ANY_COMPONENT);
+
+        oldtranspprop = icalcomponent_get_first_property(oldical, ICAL_TRANSP_PROPERTY);
     }
 
     for (prop = icalcomponent_get_first_property(ical, ICAL_ANY_PROPERTY);
@@ -518,8 +521,19 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
                         icalcomponent_add_component(vpatch, patch);
                     }
 
-                    icalcomponent_remove_property(ical, prop);
-                    icalcomponent_add_property(patch, prop);
+                    if (oldical) {
+                        icalcomponent_remove_property(ical, prop);
+                        icalcomponent_add_property(patch, prop);
+                        if (kind == ICAL_TRANSP_PROPERTY) {
+                            proceed_transp = 1;
+                            if (oldtranspprop) {
+                                icalcomponent_add_property(ical, icalproperty_clone(oldtranspprop));
+                            }
+                        }
+                    }
+                    else {
+                        icalcomponent_add_property(patch, icalproperty_clone(prop));
+                    }
                 }
                 break;
 
@@ -564,6 +578,22 @@ static int validate_propupdates(icalcomponent *ical, icalcomponent *oldical,
         }
 
         oldprop = icalcomponent_get_next_property(oldical, ICAL_ANY_PROPERTY);
+    }
+
+    if (oldtranspprop && proceed_transp == 0) {
+        icalcomponent_add_property(ical, icalproperty_clone(oldtranspprop));
+         if (vpatch) {
+             /* Add per-user property to VPATCH */
+             if (!patch) {
+                 patch = icalcomponent_vanew(ICAL_XPATCH_COMPONENT,
+                                             icalproperty_new_patchtarget(
+                                                 buf_cstring(path)),
+                                             NULL);
+                 icalcomponent_add_component(vpatch, patch);
+             }
+             icalproperty *inprop = icalproperty_new_transp(ICAL_TRANSP_OPAQUE);
+             icalcomponent_add_property(patch, inprop);
+         }
     }
 
     for (comp = icalcomponent_get_first_component(ical, ICAL_ANY_COMPONENT);
