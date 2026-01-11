@@ -750,7 +750,7 @@ static int mystore(struct dbengine *db,
                    struct txn **tid, int overwrite,
                    int isdelete)
 {
-    char cmd[1024], *esc_key;
+    char cmd[4096], *esc_key; // 1024->4096 by kiyong.kim
     int free_esc_key = 0;
     const char dummy = 0;
     int r = 0;
