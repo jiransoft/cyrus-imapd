@@ -750,7 +750,7 @@ static int mystore(struct dbengine *db,
                    struct txn **tid, int overwrite,
                    int isdelete)
 {
-    char cmd[4096], *esc_key; // 1024->4096 by kiyong.kim
+    char cmd[16384], *esc_key; // 1024->4096->16384 to avoid truncation with large values
     int free_esc_key = 0;
     const char dummy = 0;
     int r = 0;
@@ -769,8 +769,17 @@ static int mystore(struct dbengine *db,
 
     if (isdelete) {
         /* DELETE the entry */
-        snprintf(cmd, sizeof(cmd), "DELETE FROM %s WHERE dbkey = '%s';",
-                 db->table, esc_key);
+        int n = snprintf(cmd, sizeof(cmd), "DELETE FROM %s WHERE dbkey = '%s';",
+                         db->table, esc_key);
+        if (n < 0 || (size_t) n >= sizeof(cmd)) {
+            xsyslog(LOG_ERR, "DBERROR: SQL command truncated (buffer too small)",
+                             "table=<%s> op=<DELETE> cmd_bufsize=<%zu> needed=<%d> keylen=<%d> esc_keylen=<%zu>",
+                             db->table, sizeof(cmd), n, keylen, strlen(esc_key));
+            if (tid) dbengine->sql_rollback_txn(db->conn);
+            if (free_esc_key) free(esc_key);
+            return CYRUSDB_INTERNAL;
+        }
+
         r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
 
         /* see if we just removed the previously SELECTed key */
@@ -799,30 +808,62 @@ static int mystore(struct dbengine *db,
 
         /* check if the entry exists */
         if (!srock.found) {
-            snprintf(cmd, sizeof(cmd),
-                     "SELECT * FROM %s WHERE dbkey = '%s';",
-                     db->table, esc_key);
+            int n = snprintf(cmd, sizeof(cmd),
+                             "SELECT * FROM %s WHERE dbkey = '%s';",
+                             db->table, esc_key);
+            if (n < 0 || (size_t) n >= sizeof(cmd)) {
+                xsyslog(LOG_ERR, "DBERROR: SQL command truncated (buffer too small)",
+                                 "table=<%s> op=<SELECT> cmd_bufsize=<%zu> needed=<%d> keylen=<%d> esc_keylen=<%zu>",
+                                 db->table, sizeof(cmd), n, keylen, strlen(esc_key));
+                if (tid) dbengine->sql_rollback_txn(db->conn);
+                if (free_esc_data) free(esc_data);
+                if (free_esc_key) free(esc_key);
+                return CYRUSDB_INTERNAL;
+            }
+
             r = dbengine->sql_exec(db->conn, cmd, &select_cb, &srock);
         }
 
         if (!r && srock.found) {
             if (overwrite) {
                 /* already have this entry, UPDATE it */
-                snprintf(cmd, sizeof(cmd),
-                         "UPDATE %s SET data = '%s' WHERE dbkey = '%s';",
-                         db->table, esc_data, esc_key);
+                int n = snprintf(cmd, sizeof(cmd),
+                                 "UPDATE %s SET data = '%s' WHERE dbkey = '%s';",
+                                 db->table, esc_data, esc_key);
+                if (n < 0 || (size_t) n >= sizeof(cmd)) {
+                    xsyslog(LOG_ERR, "DBERROR: SQL command truncated (buffer too small)",
+                                     "table=<%s> op=<UPDATE> cmd_bufsize=<%zu> needed=<%d> keylen=<%d> esc_keylen=<%zu> datalen=<%d> esc_datalen=<%zu>",
+                                     db->table, sizeof(cmd), n, keylen, strlen(esc_key), datalen, strlen(esc_data));
+                    if (tid) dbengine->sql_rollback_txn(db->conn);
+                    if (free_esc_data) free(esc_data);
+                    if (free_esc_key) free(esc_key);
+                    return CYRUSDB_INTERNAL;
+                }
+
                 r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
             }
             else {
                 if (tid) dbengine->sql_rollback_txn(db->conn);
+                if (free_esc_data) free(esc_data);
+                if (free_esc_key) free(esc_key);
                 return CYRUSDB_EXISTS;
             }
         }
         else if (!r && !srock.found) {
             /* INSERT the new entry */
-            snprintf(cmd, sizeof(cmd),
-                     "INSERT INTO %s VALUES ('%s', '%s');",
-                     db->table, esc_key, esc_data);
+            int n = snprintf(cmd, sizeof(cmd),
+                             "INSERT INTO %s VALUES ('%s', '%s');",
+                             db->table, esc_key, esc_data);
+            if (n < 0 || (size_t) n >= sizeof(cmd)) {
+                xsyslog(LOG_ERR, "DBERROR: SQL command truncated (buffer too small)",
+                                 "table=<%s> op=<INSERT> cmd_bufsize=<%zu> needed=<%d> keylen=<%d> esc_keylen=<%zu> datalen=<%d> esc_datalen=<%zu>",
+                                 db->table, sizeof(cmd), n, keylen, strlen(esc_key), datalen, strlen(esc_data));
+                if (tid) dbengine->sql_rollback_txn(db->conn);
+                if (free_esc_data) free(esc_data);
+                if (free_esc_key) free(esc_key);
+                return CYRUSDB_INTERNAL;
+            }
+
             r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
         }
 
