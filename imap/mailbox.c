@@ -2709,7 +2709,19 @@ EXPORTED void mailbox_unlock_index(struct mailbox *mailbox, struct statusdata *s
     }
 
     if (mailbox->local_cstate) {
+        struct timeval _c0, _c1;
+        double _cdt;
+
+        gettimeofday(&_c0, 0);
         int r = conversations_commit(&mailbox->local_cstate);
+        gettimeofday(&_c1, 0);
+
+        _cdt = timesub(&_c0, &_c1);
+        if (_cdt > 0.5) {
+            syslog(LOG_NOTICE, "SLOWCONVCOMMIT mailbox=%s seconds=%0.3f",
+                   mailbox_name(mailbox), _cdt);
+        }
+
         if (r) {
             xsyslog(LOG_ERR, "IOERROR: Error committing to conversations database",
                     "mailbox=<%s> error=<%s>",
@@ -3082,47 +3094,78 @@ EXPORTED int mailbox_commit(struct mailbox *mailbox)
     static unsigned char buf[INDEX_HEADER_SIZE];
     int n, r;
 
+    struct timeval _t0, _t1;
+    double _dt;
+#define _COMMIT_SLOWLOG_THRESHOLD_SECS 0.5
+#define _COMMIT_STEP_BEGIN() gettimeofday(&_t0, 0)
+#define _COMMIT_STEP_END(stepname) do { \
+    gettimeofday(&_t1, 0); \
+    _dt = timesub(&_t0, &_t1); \
+    if (_dt > _COMMIT_SLOWLOG_THRESHOLD_SECS) \
+        syslog(LOG_NOTICE, "SLOWCOMMIT step=%s mailbox=%s seconds=%0.3f", \
+               (stepname), mailbox_name(mailbox), _dt); \
+} while(0)
+
     /* try to commit sub parts first */
 #ifdef WITH_DAV
+    _COMMIT_STEP_BEGIN();
     r = mailbox_commit_dav(mailbox);
+    _COMMIT_STEP_END("dav");
     if (r) return r;
 #endif
 
 #ifdef USE_SIEVE
+    _COMMIT_STEP_BEGIN();
     r = mailbox_commit_sieve(mailbox);
+    _COMMIT_STEP_END("sieve");
     if (r) return r;
 #endif
 
+    _COMMIT_STEP_BEGIN();
     r = mailbox_commit_cache(mailbox);
+    _COMMIT_STEP_END("cache");
     if (r) return r;
 
+    _COMMIT_STEP_BEGIN();
     r = mailbox_commit_quota(mailbox);
+    _COMMIT_STEP_END("quota");
     if (r) return r;
 
+    _COMMIT_STEP_BEGIN();
     r = annotate_state_commit(&mailbox->annot_state);
+    _COMMIT_STEP_END("annotations");
     if (r) return r;
 
+    _COMMIT_STEP_BEGIN();
     r = mailbox_commit_header(mailbox);
+    _COMMIT_STEP_END("header");
     if (r) return r;
 
+    _COMMIT_STEP_BEGIN();
     r = _commit_changes(mailbox);
+    _COMMIT_STEP_END("commit_changes");
     if (r) return r;
 
     if (!mailbox->i.dirty)
         return 0;
 
     if (!mboxname_isdeletedmailbox(mailbox_name(mailbox), NULL)) {
+        _COMMIT_STEP_BEGIN();
         mboxname_setmodseq(mailbox_name(mailbox),
                            mailbox->i.highestmodseq,
                            mailbox_mbtype(mailbox), /*flags*/0);
+        _COMMIT_STEP_END("setmodseq");
     }
 
     /* always update xconvmodseq, it might have been done by annotations */
+    _COMMIT_STEP_BEGIN();
     r = mailbox_update_xconvmodseq(mailbox, mailbox->i.highestmodseq, /*force*/0);
+    _COMMIT_STEP_END("update_xconvmodseq");
     if (r) return r;
 
     mailbox_index_header_to_buf(&mailbox->i, buf);
 
+    _COMMIT_STEP_BEGIN();
     lseek(mailbox->index_fd, 0, SEEK_SET);
     n = retry_write(mailbox->index_fd, buf, mailbox->i.start_offset);
     if (n < 0 || fsync(mailbox->index_fd)) {
@@ -3131,6 +3174,9 @@ EXPORTED int mailbox_commit(struct mailbox *mailbox)
                          mailbox_name(mailbox));
         return IMAP_IOERROR;
     }
+    _COMMIT_STEP_END("write_index_header_fsync");
+#undef _COMMIT_STEP_END
+#undef _COMMIT_STEP_BEGIN
 
     if (config_auditlog && mailbox->modseq_dirty)
         syslog(LOG_NOTICE, "auditlog: modseq sessionid=<%s> "
