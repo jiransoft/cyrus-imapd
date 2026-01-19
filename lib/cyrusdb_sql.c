@@ -563,8 +563,8 @@ static int myopen(const char *fname, int flags, struct dbengine **ret, struct tx
                      table, dbengine->binary_type, dbengine->binary_type);
             if (dbengine->sql_exec(conn, cmd, NULL, NULL)) {
                 xsyslog(LOG_ERR, "DBERROR: SQL failed",
-                                 "command=<%s>",
-                                 cmd);
+                                 "command=<%s> sql_rc=<%d>",
+                                 cmd, 1);
                 dbengine->sql_close(conn);
                 return CYRUSDB_INTERNAL;
             }
@@ -688,8 +688,8 @@ static int fetch(struct dbengine *db,
 
     if (r) {
         xsyslog(LOG_ERR, "DBERROR: SQL failed",
-                         "command=<%s>",
-                         cmd);
+                         "command=<%s> sql_rc=<%d>",
+                         cmd, r);
         if (tid) dbengine->sql_rollback_txn(db->conn);
         return CYRUSDB_INTERNAL;
     }
@@ -733,8 +733,8 @@ static int foreach(struct dbengine *db,
 
     if (r) {
         xsyslog(LOG_ERR, "DBERROR: SQL failed",
-                         "command=<%s>",
-                         cmd);
+                         "command=<%s> sql_rc=<%d>",
+                         cmd, r);
         if (tid) dbengine->sql_rollback_txn(db->conn);
         return CYRUSDB_INTERNAL;
     }
@@ -872,8 +872,8 @@ static int mystore(struct dbengine *db,
 
     if (r) {
         xsyslog(LOG_ERR, "DBERROR: SQL failed",
-                         "command=<%s>",
-                         cmd);
+                         "command=<%s> sql_rc=<%d>",
+                         cmd, r);
         if (tid) dbengine->sql_rollback_txn(db->conn);
         return CYRUSDB_INTERNAL;
     }
