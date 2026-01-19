@@ -287,8 +287,12 @@ EXPORTED int mappedfile_unlock(struct mappedfile *mf)
     gettimeofday(&endtime, 0);
     timediff = timesub(&mf->starttime, &endtime);
     if (timediff > 1.0) {
-        syslog(LOG_NOTICE, "mappedfile: longlock %s for %0.1f seconds",
-               mf->fname, timediff);
+        const char *lt = "unknown";
+        if (mf->lock_status == MF_READLOCKED) lt = "shared";
+        else if (mf->lock_status == MF_WRITELOCKED) lt = "exclusive";
+
+        syslog(LOG_NOTICE, "SLOWMAPPEDFILE longlock pid=%d file=%s lock=%s seconds=%0.3f",
+               (int)getpid(), mf->fname, lt, timediff);
     }
 
     return 0;

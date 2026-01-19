@@ -112,7 +112,8 @@ EXPORTED int lock_reopen_ex(int fd, const char *filename,
                 double locktime = (double)(endtime.tv_sec - starttime.tv_sec) +
                                   (double)(endtime.tv_usec - starttime.tv_usec)/1000000.0;
                 if (locktime > debug_locks_longer_than) /* 10ms */
-                    syslog(LOG_NOTICE, "locktimer: reopen %s (%0.2fs)", filename, locktime);
+                    syslog(LOG_NOTICE, "SLOWLOCKTIMER longlock pid=%d op=reopen file=%s seconds=%0.3f",
+                           (int)getpid(), filename, locktime);
             }
             return 0;
         }
@@ -163,7 +164,8 @@ EXPORTED int lock_setlock(int fd, int exclusive, int nonblock,
                 double locktime = (double)(endtime.tv_sec - starttime.tv_sec) +
                                   (double)(endtime.tv_usec - starttime.tv_usec)/1000000.0;
                 if (locktime > debug_locks_longer_than)
-                    syslog(LOG_NOTICE, "locktimer: reopen %s (%0.2fs)", filename, locktime);
+                    syslog(LOG_NOTICE, "SLOWLOCKTIMER longlock pid=%d op=setlock file=%s seconds=%0.3f",
+                           (int)getpid(), filename, locktime);
             }
             return 0;
         }
@@ -193,4 +195,3 @@ EXPORTED int lock_unlock(int fd, const char *filename __attribute__((unused)))
         return -1;
     }
 }
-
