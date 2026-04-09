@@ -279,7 +279,7 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
     icalproperty *prop;
     icalproperty_method meth;
     icalcomponent_kind kind;
-    const char *uid, *summary, *location, *descrip, *status;
+    const char *uid, *summary, *location, *descrip, *status, *comment = NULL;
     const char *msg_type, *filename;
     struct address_t *recipients = NULL, *originator = NULL, *recip;
     struct icaltimetype start, end;
