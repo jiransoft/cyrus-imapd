@@ -285,7 +285,7 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
     struct icaltimetype start, end;
     char *cp, when[2*RFC5322_DATETIME_MAX+4], datestr[RFC5322_DATETIME_MAX+1];
     char boundary[100], *mimebody, *ical_str;
-    size_t outlen;
+    size_t outlen = 0;
     struct buf plainbuf = BUF_INITIALIZER, tmpbuf = BUF_INITIALIZER, msgbuf = BUF_INITIALIZER;
     pid_t p = getpid();
     time_t t = time(NULL);
@@ -441,8 +441,13 @@ static int imip_send_sendmail(const char *userid, icalcomponent *ical, const cha
         buf_printf(&plainbuf, "%s\r\n", buf_cstring(&tmpbuf));
     }
 
-    mimebody = charset_qpencode_mimebody(buf_base(&plainbuf),
-                                         buf_len(&plainbuf), 0, &outlen);
+    if (buf_len(&plainbuf) == 0) {
+        mimebody = NULL;
+        outlen = 0;
+    } else {
+        mimebody = charset_qpencode_mimebody(buf_base(&plainbuf),
+                                             buf_len(&plainbuf), 0, &outlen);
+    }
 
     if (outlen > buf_len(&plainbuf)) {
         buf_appendcstr(&msgbuf, "Content-Transfer-Encoding: quoted-printable\r\n");
