@@ -3007,6 +3007,9 @@ static void _mbox_destroy(jmap_req_t *req, const char *mboxid,
                 httpd_userisadmin || httpd_userisproxyadmin,
                 req->userid, req->authstate, mboxevent, delflags);
     }
+    /* send a MailboxDelete event notification */
+    if (!r)
+        mboxevent_notify(&mboxevent);
     mboxevent_free(&mboxevent);
 
     if (r == IMAP_PERMISSION_DENIED) {
