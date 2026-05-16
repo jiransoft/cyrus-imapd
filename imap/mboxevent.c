@@ -801,8 +801,19 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
 
                 formatted_message = json_dumps(jevent,
                                                JSON_PRESERVE_ORDER|JSON_COMPACT);
-                notify(notifier, "EVENT", NULL, NULL, NULL, 0, NULL,
-                       formatted_message, fname);
+                /* notify() returns -1 when the unix-domain datagram is
+                 * over the per-message size limit (the datagram is silently
+                 * dropped). Without this warning the caller has no signal
+                 * that the event vanished — a large JMAP Email/set:destroy
+                 * was masking ~30-100 expunges this way until the search
+                 * side learned to reconcile on MailboxModseq. Keep the
+                 * notification non-fatal but surface it. */
+                if (notify(notifier, "EVENT", NULL, NULL, NULL, 0, NULL,
+                           formatted_message, fname) < 0) {
+                    syslog(LOG_WARNING,
+                           "mboxevent_notify: notify(%s) failed for event type 0x%x",
+                           notifier, type);
+                }
                 free(formatted_message);
             }
 

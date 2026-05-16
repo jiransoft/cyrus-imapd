@@ -159,7 +159,7 @@ out:
     dlist_free(&res);
 }
 
-EXPORTED void notify(const char *method,
+EXPORTED int notify(const char *method,
             const char *class, const char *priority,
             const char *user, const char *mailbox,
             int nopt, const char **options,
@@ -171,6 +171,7 @@ EXPORTED void notify(const char *method,
     char buf[NOTIFY_MAXSIZE] = "", noptstr[20];
     int buflen = 0;
     int i, r = 0;
+    int ret = 0;
     unsigned bufsiz;
     socklen_t optlen;
     struct buf logbuf = BUF_INITIALIZER;
@@ -190,13 +191,14 @@ EXPORTED void notify(const char *method,
                      user, mailbox, nopt, options,
                      message, fname, loginfo);
         free(loginfo);
-        return;
+        return 0;
     }
 
     soc = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (soc == -1) {
         syslog(LOG_ERR,
                "NOTIFY(%s): unable to create notify socket(): %m", loginfo);
+        ret = -1;
         goto out;
     }
 
@@ -218,6 +220,7 @@ EXPORTED void notify(const char *method,
         syslog(LOG_ERR,
                "NOTIFY(%s): unable to getsockopt(SO_SNDBUF) on socket: %m",
                loginfo);
+        ret = -1;
         goto out;
     }
 
@@ -249,6 +252,7 @@ EXPORTED void notify(const char *method,
 
     if (r) {
         syslog(LOG_ERR, "NOTIFY(%s): datagram too large", loginfo);
+        ret = -1;
         goto out;
     }
 
@@ -257,14 +261,17 @@ EXPORTED void notify(const char *method,
 
     if (r < 0) {
         syslog(LOG_ERR, "NOTIFY(%s): unable to sendto() socket: %m", loginfo);
+        ret = -1;
         goto out;
     }
     if (r < buflen) {
         syslog(LOG_ERR, "NOTIFY(%s): short write to socket", loginfo);
+        ret = -1;
         goto out;
     }
 
 out:
     xclose(soc);
     free(loginfo);
+    return ret;
 }

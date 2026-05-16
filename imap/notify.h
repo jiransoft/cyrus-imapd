@@ -45,10 +45,17 @@
 
 #define NOTIFY_MAXSIZE 65536  /* 64k */
 
-void notify(const char *method,
-            const char *class, const char *priority,
-            const char *user, const char *mailbox,
-            int nopt, const char **options,
-            const char *message, const char *fname);
+/*
+ * Returns 0 on success and -1 when the notification could not be
+ * delivered (e.g. the request exceeds the unix-domain datagram size
+ * limit, the socket cannot be opened, or sendto() fails). Callers that
+ * accumulate state across notifications can use the return value to
+ * detect silently-dropped events instead of relying on the syslog line.
+ */
+int notify(const char *method,
+           const char *class, const char *priority,
+           const char *user, const char *mailbox,
+           int nopt, const char **options,
+           const char *message, const char *fname);
 
 #endif /* NOTIFY_H */
