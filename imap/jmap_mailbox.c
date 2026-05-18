@@ -2678,6 +2678,9 @@ static void _mbox_update(jmap_req_t *req, struct mboxset_args *args,
                     mboxevent,
                     0 /* local_only */, 0 /* forceuser */, 0 /* ignorequota */,
                     1 /* keep_intermediaries */, 1 /* move_subscription */);
+            /* send a MailboxRename event notification if enabled */
+            if (!r)
+                mboxevent_notify(&mboxevent);
             mboxevent_free(&mboxevent);
             mboxlist_entry_free(&mbentry);
             jmap_mboxlist_lookup(newmboxname, &mbentry, NULL);
@@ -3313,6 +3316,9 @@ static void _mboxset_run(jmap_req_t *req, struct mboxset *set,
                 1 /* keep_intermediaries */, 1 /* move_subscription */);
         strarray_add(update_intermediaries, tmp->tmp_imapname);
         strarray_add(update_intermediaries, tmp->new_imapname);
+        /* send a MailboxRename event notification if enabled */
+        if (!r)
+            mboxevent_notify(&mboxevent);
         mboxevent_free(&mboxevent);
         if (r) {
             syslog(LOG_ERR, "jmap: mailbox rename failed half-way: old=%s tmp=%s new=%s: %s",
