@@ -94,6 +94,11 @@ enum event_type {
     EVENT_MESSAGES_UNSCHEDULED = (1<<26),
 };
 
+/* Maximum per-record entries (uidset / vnd.cmu.oldUidset / vnd.cmu.midset)
+ * packed into a single notification datagram. Bulk EXPUNGE / COPY / MOVE
+ * events with more records are dispatched as multiple datagrams. */
+#define CYRUS_EVENT_CHUNK_SIZE 50
+
 /*
  * event parameters defined in RFC 5423 - Internet Message Store Events
  *

@@ -75,6 +75,9 @@
                         EVENT_MESSAGE_EXPUNGE|EVENT_MESSAGE_NEW|\
                         EVENT_MESSAGE_COPY|EVENT_MESSAGE_MOVE)
 
+#define BULK_RECORD_EVENTS (EVENT_MESSAGE_EXPUNGE|\
+                            EVENT_MESSAGE_COPY|EVENT_MESSAGE_MOVE)
+
 #define FLAGS_EVENTS   (EVENT_FLAGS_SET|EVENT_FLAGS_CLEAR|EVENT_MESSAGE_READ|\
                         EVENT_MESSAGE_TRASH)
 
@@ -679,13 +682,97 @@ static int mboxevent_expected_param(enum event_type type, enum event_param param
 }
 
 #define TIMESTAMP_MAX 32
-EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
+
+/* Dispatch one event (or one chunk of a bulk event) to the external
+ * notifier and IDLE consumer. Callers that chunk a bulk event must
+ * slice event->uidset / olduidset / midset and clear the previously
+ * filled UIDSET / OLD_UIDSET / MIDSET param slots between chunks. */
+static void mboxevent_dispatch_event(struct mboxevent *event)
 {
     enum event_type type;
-    struct mboxevent *event;
-    char stimestamp[TIMESTAMP_MAX+1];
     char *formatted_message;
     const char *fname = NULL;
+
+    if (event->uidset) {
+        FILL_STRING_PARAM(event, EVENT_UIDSET, seqset_cstring(event->uidset));
+    }
+    if (strarray_size(&event->midset) > 0) {
+        FILL_ARRAY_PARAM(event, EVENT_MIDSET, &event->midset);
+    }
+    if (event->olduidset) {
+        FILL_STRING_PARAM(event, EVENT_OLD_UIDSET, seqset_cstring(event->olduidset));
+    }
+
+    /* may split FlagsSet event in several event notifications */
+    do {
+        type = event->type;
+        /* prefer MessageRead and MessageTrash to FlagsSet as
+         * advised in RFC 5423 section 4.2
+         */
+        if (type == EVENT_FLAGS_SET) {
+            int i;
+
+            if ((i = strarray_find(&event->flagnames, "\\Deleted", 0)) >= 0) {
+                type = EVENT_MESSAGE_TRASH;
+                free(strarray_remove(&event->flagnames, i));
+            }
+            else if ((i = strarray_find(&event->flagnames, "\\Seen", 0)) >= 0) {
+                type = EVENT_MESSAGE_READ;
+                free(strarray_remove(&event->flagnames, i));
+            }
+        }
+
+        if (strarray_size(&event->flagnames) > 0) {
+            /* don't send flagNames parameter for those events */
+            if (type != EVENT_MESSAGE_TRASH && type != EVENT_MESSAGE_READ) {
+                char *flagnames = strarray_join(&event->flagnames, " ");
+                FILL_STRING_PARAM(event, EVENT_FLAG_NAMES, flagnames);
+
+                /* stop to loop for flagsSet event here */
+                strarray_fini(&event->flagnames);
+            }
+        }
+
+        /* notification is ready to send */
+        json_t *jevent = json_formatter(type, event->params);
+
+        if (notifier && (type & enabled_events)) {
+            /* check if expected event parameters are filled */
+            assert(filled_params(type, event));
+
+            formatted_message = json_dumps(jevent,
+                                           JSON_PRESERVE_ORDER|JSON_COMPACT);
+            /* notify() returns -1 when the unix-domain datagram is
+             * over the per-message size limit (the datagram is silently
+             * dropped). Without this warning the caller has no signal
+             * that the event vanished — a large JMAP Email/set:destroy
+             * was masking ~30-100 expunges this way until the search
+             * side learned to reconcile on MailboxModseq. Keep the
+             * notification non-fatal but surface it. */
+            if (notify(notifier, "EVENT", NULL, NULL, NULL, 0, NULL,
+                       formatted_message, fname) < 0) {
+                syslog(LOG_WARNING,
+                       "mboxevent_notify: notify(%s) failed for event type 0x%x",
+                       notifier, type);
+            }
+            free(formatted_message);
+        }
+
+        if (idle_notifier &&
+            (type & (MESSAGE_EVENTS|FLAGS_EVENTS|MAILBOX_EVENTS|SUBS_EVENTS))) {
+            /* the group to which the event belongs is for IMAP IDLE/NOTIFY */
+            json_object_set_new(jevent, "@type", json_string("notify"));
+            idle_notifier(jevent);
+        }
+        json_decref(jevent);
+    }
+    while (strarray_size(&event->flagnames) > 0);
+}
+
+EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
+{
+    struct mboxevent *event;
+    char stimestamp[TIMESTAMP_MAX+1];
 
     /* nothing to notify */
     if (!*mboxevents)
@@ -752,80 +839,106 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
             FILL_STRING_PARAM(event, EVENT_TIMESTAMP, xstrdup(stimestamp));
         }
 
+        /* Bulk EXPUNGE/COPY/MOVE notifications can accumulate enough
+         * records for the AF_UNIX datagram to exceed the per-message
+         * size limit, in which case notify() drops it silently. Slice
+         * such events into CYRUS_EVENT_CHUNK_SIZE-record windows and
+         * emit one datagram per chunk. */
+        int total = 0;
         if (event->uidset) {
-            FILL_STRING_PARAM(event, EVENT_UIDSET, seqset_cstring(event->uidset));
+            seqset_reset(event->uidset);
+            while (seqset_getnext(event->uidset)) total++;
         }
-        if (strarray_size(&event->midset) > 0) {
-            FILL_ARRAY_PARAM(event, EVENT_MIDSET, &event->midset);
-        }
-        if (event->olduidset) {
-            FILL_STRING_PARAM(event, EVENT_OLD_UIDSET, seqset_cstring(event->olduidset));
+        int do_chunk = (event->type & BULK_RECORD_EVENTS) &&
+                       total > CYRUS_EVENT_CHUNK_SIZE &&
+                       strarray_size(&event->midset) > 0;
+
+        if (!do_chunk) {
+            mboxevent_dispatch_event(event);
+            continue;
         }
 
-        /* may split FlagsSet event in several event notifications */
-        do {
-            type = event->type;
-            /* prefer MessageRead and MessageTrash to FlagsSet as
-             * advised in RFC 5423 section 4.2
-             */
-            if (type == EVENT_FLAGS_SET) {
-                int i;
+        seqset_t *orig_uidset = event->uidset;
+        seqset_t *orig_olduidset = event->olduidset;
+        strarray_t orig_midset = event->midset;
+        int midset_size = strarray_size(&orig_midset);
+        uint32_t *flat_uid = xzmalloc(total * sizeof(uint32_t));
+        uint32_t *flat_oldu = NULL;
+        int i, ci;
 
-                if ((i = strarray_find(&event->flagnames, "\\Deleted", 0)) >= 0) {
-                    type = EVENT_MESSAGE_TRASH;
-                    free(strarray_remove(&event->flagnames, i));
-                }
-                else if ((i = strarray_find(&event->flagnames, "\\Seen", 0)) >= 0) {
-                    type = EVENT_MESSAGE_READ;
-                    free(strarray_remove(&event->flagnames, i));
-                }
+        seqset_reset(orig_uidset);
+        for (i = 0; i < total; i++)
+            flat_uid[i] = seqset_getnext(orig_uidset);
+
+        if (orig_olduidset) {
+            flat_oldu = xzmalloc(total * sizeof(uint32_t));
+            seqset_reset(orig_olduidset);
+            for (i = 0; i < total; i++)
+                flat_oldu[i] = seqset_getnext(orig_olduidset);
+        }
+
+        int n_chunks = (total + CYRUS_EVENT_CHUNK_SIZE - 1) /
+                       CYRUS_EVENT_CHUNK_SIZE;
+
+        for (ci = 0; ci < n_chunks; ci++) {
+            int start = ci * CYRUS_EVENT_CHUNK_SIZE;
+            int end = start + CYRUS_EVENT_CHUNK_SIZE;
+            int mstart, mend;
+            seqset_t *chunk_uidset;
+            seqset_t *chunk_olduidset = NULL;
+
+            if (end > total) end = total;
+
+            chunk_uidset = seqset_init(0, SEQ_SPARSE);
+            for (i = start; i < end; i++)
+                seqset_add(chunk_uidset, flat_uid[i], 1);
+            event->uidset = chunk_uidset;
+
+            if (orig_olduidset) {
+                chunk_olduidset = seqset_init(0, SEQ_SPARSE);
+                for (i = start; i < end; i++)
+                    seqset_add(chunk_olduidset, flat_oldu[i], 1);
+                event->olduidset = chunk_olduidset;
             }
 
-            if (strarray_size(&event->flagnames) > 0) {
-                /* don't send flagNames parameter for those events */
-                if (type != EVENT_MESSAGE_TRASH && type != EVENT_MESSAGE_READ) {
-                    char *flagnames = strarray_join(&event->flagnames, " ");
-                    FILL_STRING_PARAM(event, EVENT_FLAG_NAMES, flagnames);
+            /* midset may be shorter than uidset due to strarray_add
+             * deduping Message-Ids; the tail chunk's midset truncates
+             * to whatever remains. */
+            memset(&event->midset, 0, sizeof(strarray_t));
+            mstart = (start < midset_size) ? start : midset_size;
+            mend   = (end   < midset_size) ? end   : midset_size;
+            for (i = mstart; i < mend; i++)
+                strarray_append(&event->midset,
+                                strarray_nth(&orig_midset, i));
 
-                    /* stop to loop for flagsSet event here */
-                    strarray_fini(&event->flagnames);
-                }
+            /* Drop prior chunk's UIDSET / OLD_UIDSET (slot-owned
+             * strings allocated by seqset_cstring) and MIDSET (value.a
+             * points at event->midset itself — flag-only clear). */
+            if (event->params[EVENT_UIDSET].filled) {
+                free(event->params[EVENT_UIDSET].value.s);
+                event->params[EVENT_UIDSET].filled = 0;
             }
-
-            /* notification is ready to send */
-            json_t *jevent = json_formatter(type, event->params);
-
-            if (notifier && (type & enabled_events)) {
-                /* check if expected event parameters are filled */
-                assert(filled_params(type, event));
-
-                formatted_message = json_dumps(jevent,
-                                               JSON_PRESERVE_ORDER|JSON_COMPACT);
-                /* notify() returns -1 when the unix-domain datagram is
-                 * over the per-message size limit (the datagram is silently
-                 * dropped). Without this warning the caller has no signal
-                 * that the event vanished — a large JMAP Email/set:destroy
-                 * was masking ~30-100 expunges this way until the search
-                 * side learned to reconcile on MailboxModseq. Keep the
-                 * notification non-fatal but surface it. */
-                if (notify(notifier, "EVENT", NULL, NULL, NULL, 0, NULL,
-                           formatted_message, fname) < 0) {
-                    syslog(LOG_WARNING,
-                           "mboxevent_notify: notify(%s) failed for event type 0x%x",
-                           notifier, type);
-                }
-                free(formatted_message);
+            if (event->params[EVENT_OLD_UIDSET].filled) {
+                free(event->params[EVENT_OLD_UIDSET].value.s);
+                event->params[EVENT_OLD_UIDSET].filled = 0;
             }
+            event->params[EVENT_MIDSET].filled = 0;
 
-            if (idle_notifier &&
-                (type & (MESSAGE_EVENTS|FLAGS_EVENTS|MAILBOX_EVENTS|SUBS_EVENTS))) {
-                /* the group to which the event belongs is for IMAP IDLE/NOTIFY */
-                json_object_set_new(jevent, "@type", json_string("notify"));
-                idle_notifier(jevent);
-            }
-            json_decref(jevent);
+            mboxevent_dispatch_event(event);
+
+            seqset_free(&chunk_uidset);
+            if (chunk_olduidset) seqset_free(&chunk_olduidset);
+            strarray_fini(&event->midset);
         }
-        while (strarray_size(&event->flagnames) > 0);
+
+        /* Restore originals so mboxevent_free cleans up the full set.
+         * The last chunk's UIDSET / OLD_UIDSET strings remain in the
+         * param slots and are freed as STRING by mboxevent_free. */
+        event->uidset = orig_uidset;
+        event->olduidset = orig_olduidset;
+        event->midset = orig_midset;
+        free(flat_uid);
+        free(flat_oldu);
     }
 
     return;
