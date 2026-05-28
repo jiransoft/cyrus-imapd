@@ -869,6 +869,17 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
         seqset_t *orig_uidset = event->uidset;
         seqset_t *orig_olduidset = event->olduidset;
         strarray_t orig_midset = event->midset;
+        /* mboxevent_dispatch_event's do-while at line 715 consumes
+         * event->flagnames: it removes \\Seen / \\Deleted for type
+         * promotion (MessageRead / MessageTrash) and runs
+         * strarray_fini on any remaining flagnames after filling the
+         * FLAG_NAMES param. So the first chunk's dispatch leaves
+         * event->flagnames empty; subsequent chunks would be emitted
+         * without their flag context and the downstream indexer would
+         * ack them as no-op (no \\Seen / \\Deleted means no reindex).
+         * Snapshot here and rebuild before each chunk's dispatch. */
+        strarray_t orig_flagnames = STRARRAY_INITIALIZER;
+        strarray_cat(&orig_flagnames, &event->flagnames);
         int midset_size = strarray_size(&orig_midset);
         uint32_t *flat_uid = xzmalloc(total * sizeof(uint32_t));
         uint32_t *flat_oldu = NULL;
@@ -920,8 +931,9 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
                                 strarray_nth(&orig_midset, i));
 
             /* Drop prior chunk's UIDSET / OLD_UIDSET (slot-owned
-             * strings allocated by seqset_cstring) and MIDSET (value.a
-             * points at event->midset itself — flag-only clear). */
+             * strings allocated by seqset_cstring), MIDSET (value.a
+             * points at event->midset itself — flag-only clear), and
+             * FLAG_NAMES (slot-owned string from strarray_join). */
             if (event->params[EVENT_UIDSET].filled) {
                 free(event->params[EVENT_UIDSET].value.s);
                 event->params[EVENT_UIDSET].filled = 0;
@@ -931,6 +943,17 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
                 event->params[EVENT_OLD_UIDSET].filled = 0;
             }
             event->params[EVENT_MIDSET].filled = 0;
+            if (event->params[EVENT_FLAG_NAMES].filled) {
+                free(event->params[EVENT_FLAG_NAMES].value.s);
+                event->params[EVENT_FLAG_NAMES].filled = 0;
+            }
+
+            /* Re-populate flagnames from the snapshot so dispatch's
+             * do-while sees the full flag context (and so type
+             * promotion + FLAG_NAMES filling work on every chunk). */
+            strarray_fini(&event->flagnames);
+            memset(&event->flagnames, 0, sizeof(strarray_t));
+            strarray_cat(&event->flagnames, &orig_flagnames);
 
             mboxevent_dispatch_event(event);
 
@@ -941,10 +964,14 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
 
         /* Restore originals so mboxevent_free cleans up the full set.
          * The last chunk's UIDSET / OLD_UIDSET strings remain in the
-         * param slots and are freed as STRING by mboxevent_free. */
+         * param slots and are freed as STRING by mboxevent_free.
+         * event->flagnames was consumed by the last dispatch — leave
+         * it empty (mboxevent_free is safe over an empty strarray);
+         * the snapshot owns its own copies and is freed here. */
         event->uidset = orig_uidset;
         event->olduidset = orig_olduidset;
         event->midset = orig_midset;
+        strarray_fini(&orig_flagnames);
         free(flat_uid);
         free(flat_oldu);
     }
