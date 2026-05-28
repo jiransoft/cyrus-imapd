@@ -75,8 +75,16 @@
                         EVENT_MESSAGE_EXPUNGE|EVENT_MESSAGE_NEW|\
                         EVENT_MESSAGE_COPY|EVENT_MESSAGE_MOVE)
 
-#define BULK_RECORD_EVENTS (EVENT_MESSAGE_EXPUNGE|\
-                            EVENT_MESSAGE_COPY|EVENT_MESSAGE_MOVE)
+/* Every event whose payload may carry a vnd.cmu.midset array per
+ * RFC 5423 — i.e., every event that batches per-record data. The
+ * dispatcher's `total > CYRUS_EVENT_CHUNK_SIZE` precondition keeps
+ * the natural 1-record events (APPEND, NEW) on the unsliced fast
+ * path; including them here just makes the guard match the spec. */
+#define BULK_RECORD_EVENTS (EVENT_MESSAGE_APPEND|EVENT_MESSAGE_EXPIRE|\
+                            EVENT_MESSAGE_EXPUNGE|EVENT_MESSAGE_NEW|\
+                            EVENT_MESSAGE_COPY|EVENT_MESSAGE_MOVE|\
+                            EVENT_FLAGS_SET|EVENT_FLAGS_CLEAR|\
+                            EVENT_MESSAGE_READ|EVENT_MESSAGE_TRASH)
 
 #define FLAGS_EVENTS   (EVENT_FLAGS_SET|EVENT_FLAGS_CLEAR|EVENT_MESSAGE_READ|\
                         EVENT_MESSAGE_TRASH)
