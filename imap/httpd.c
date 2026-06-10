@@ -94,6 +94,7 @@
 #include "proxy.h"
 #include "sync_support.h"
 #include "userdeny.h"
+#include "om_ipcheck.h"
 #include "message.h"
 #include "idle.h"
 #include "times.h"
@@ -786,6 +787,11 @@ static void httpd_reset(struct http_connection *conn)
     httpd_altsvc = NULL;
 
     saslprops_reset(&saslprops);
+
+    /* Clear the om_ipcheck effective-client-IP override so a reused httpd
+     * child never carries an XFF-derived IP across connection boundaries;
+     * http_auth recomputes it per request, this is the safe default. */
+    om_ipcheck_set_client_ip(NULL);
 
     session_new_id();
 
@@ -1803,6 +1809,11 @@ static int auth_check_hdrs(struct transaction_t *txn, int *sasl_result)
              (hdr = spool_getheader(txn->req_hdrs, "Authorize-As")) &&
              *hdr[0]) {
         const char *authzid = hdr[0];
+
+        /* This path bypasses http_auth(), where the om_ipcheck client-IP
+         * override is normally recomputed - clear it so the proxy policy
+         * check never reuses a stale override from a previous request. */
+        om_ipcheck_set_client_ip(NULL);
 
         r = proxy_authz(&authzid, txn);
         if (r) {
@@ -4228,6 +4239,86 @@ static int http_auth(const char *creds, struct transaction_t *txn)
     }
     chal->param = NULL;
 
+    /* Compute the effective client IP for om_ipcheck: when the TCP peer
+     * is a trusted proxy (traefik), use the last element of the last
+     * X-Forwarded-For header; earlier hops are client-forgeable. */
+    om_ipcheck_set_client_ip(NULL);
+    if (config_getswitch(IMAPOPT_OM_IPCHECK)) {
+        const char *trusted =
+            config_getstring(IMAPOPT_OM_IPCHECK_TRUSTED_PROXIES);
+        const char *peerport =
+            buf_cstringnull_ifempty(&saslprops.ipremoteport);
+        char peer[INET6_ADDRSTRLEN+1] = "";
+
+        if (trusted && peerport) {
+            /* peer is "<ip>;<port>" - strip at last ';' (IPv6-safe) */
+            const char *semi = strrchr(peerport, ';');
+            size_t plen = semi ? (size_t) (semi - peerport) : strlen(peerport);
+
+            if (plen && plen < sizeof(peer)) {
+                memcpy(peer, peerport, plen);
+                peer[plen] = '\0';
+            }
+        }
+
+        if (*peer && om_ipcheck_ip_in_cidrs(peer, trusted)) {
+            const char **xff =
+                spool_getheader(txn->req_hdrs, "X-Forwarded-For");
+
+            if (xff) {
+                const char *val;
+                size_t clen;
+                char client[INET6_ADDRSTRLEN+1];
+
+                while (xff[1]) xff++;
+                val = strrchr(xff[0], ',');
+                val = val ? val + 1 : xff[0];
+                while (*val == ' ' || *val == '\t') val++;
+                clen = strlen(val);
+                while (clen && (val[clen-1] == ' ' || val[clen-1] == '\t'))
+                    clen--;
+
+                if (clen && clen < sizeof(client)) {
+                    char *colon;
+                    struct in_addr a4;
+                    struct in6_addr a6;
+
+                    memcpy(client, val, clen);
+                    client[clen] = '\0';
+
+                    if (client[0] == '[') {
+                        /* "[v6]" or "[v6]:port" */
+                        char *rb = strchr(client, ']');
+                        if (rb) {
+                            *rb = '\0';
+                            memmove(client, client+1, rb - client);
+                        }
+                    }
+                    else if ((colon = strchr(client, ':')) &&
+                             !strchr(colon+1, ':')) {
+                        /* "a.b.c.d:port" (single colon) */
+                        *colon = '\0';
+                    }
+
+                    if (client[0] &&
+                        (inet_pton(AF_INET, client, &a4) == 1 ||
+                         inet_pton(AF_INET6, client, &a6) == 1)) {
+                        om_ipcheck_set_client_ip(client);
+                    }
+                    else {
+                        /* malformed value from a trusted proxy: keep the
+                         * peer IP instead of failing closed */
+                        syslog(LOG_NOTICE, "om_ipcheck: malformed "
+                               "X-Forwarded-For value '%s' from trusted "
+                               "proxy %s, using peer IP", client, peer);
+                    }
+                }
+            }
+            /* trusted peer but no XFF: fall back to the peer IP, which
+             * is normally covered by om_ipcheck_exempt_cidrs */
+        }
+    }
+
     if (chal->scheme) {
         /* Use current scheme, if possible */
         scheme = chal->scheme;
@@ -4387,6 +4478,16 @@ static int http_auth(const char *creds, struct transaction_t *txn)
         httpd_extrafolder = NULL;
         httpd_extradomain = NULL;
         httpd_authstate = auth_newstate(user);
+
+        /* OfficeMail per-domain client-IP allowlist check */
+        status = om_ipcheck_authorize(httpd_saslconn, user,
+                                      global_authisa(httpd_authstate,
+                                                     IMAPOPT_ADMINS));
+        if (status) {
+            auth_freestate(httpd_authstate);
+            httpd_authstate = NULL;
+            return status;
+        }
     }
     else {
         /* SASL-based authentication (SCRAM_*, Negotiate) */
