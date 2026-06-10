@@ -74,6 +74,7 @@
 #include "libcyr_cfg.h"
 #include "mboxlist.h"
 #include "mutex.h"
+#include "om_ipcheck.h"
 #include "prot.h" /* for PROT_BUFSIZE */
 #include "strarray.h"
 #include "userdeny.h"
@@ -742,6 +743,15 @@ EXPORTED int mysasl_proxy_policy(sasl_conn_t *conn,
 
     /* ok, is auth_identity an admin? */
     userisadmin = global_authisa(authstate, IMAPOPT_ADMINS);
+
+    /* OfficeMail per-domain client-IP allowlist check */
+    if (!userisadmin) {
+        int ipr = om_ipcheck_authorize(conn, requested_user, userisadmin);
+        if (ipr != SASL_OK) {
+            auth_freestate(authstate);
+            return ipr;
+        }
+    }
 
     if (!ctx) {
         /* for now only admins are allowed */
