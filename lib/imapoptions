@@ -2008,6 +2008,24 @@ command line options:
 And the notification message will be available on \fIstdin\fR.
 */
 
+{ "om_ipcheck", 0, SWITCH, "3.12.2" }
+/* If enabled, successful authentications are subjected to a per-domain
+   client-IP allowlist check against the OfficeMail verifier daemon. */
+
+{ "om_ipcheck_exempt_cidrs", NULL, STRING, "3.12.2" }
+/* Space-separated list of CIDRs (IPv4/IPv6).  Client IPs inside any of
+   these networks skip the IP allowlist check (e.g. internal service
+   accounts). */
+
+{ "om_ipcheck_socket", "/run/xoauth2/verifier.sock", STRING, "3.12.2" }
+/* Unix domain socket of the OfficeMail verifier daemon used for IP
+   allowlist checks. */
+
+{ "om_ipcheck_trusted_proxies", NULL, STRING, "3.12.2" }
+/* Space-separated list of CIDRs.  Used by httpd only: when the TCP peer
+   is inside one of these networks, the effective client IP is taken from
+   the last X-Forwarded-For header value. */
+
 # Commented out - there's no such thing as "partition-name", but we need
 # this for the man page
 # { "partition-name", NULL, STRING, "2.3.17" }

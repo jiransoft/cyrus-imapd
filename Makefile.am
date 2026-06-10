@@ -1027,6 +1027,8 @@ imap_libcyrus_imap_la_SOURCES = \
     imap/mutex.h \
     imap/notify.c \
     imap/notify.h \
+    imap/om_ipcheck.c \
+    imap/om_ipcheck.h \
     imap/partlist.c \
     imap/partlist.h \
     imap/prometheus.c \
