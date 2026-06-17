@@ -33,4 +33,18 @@ void om_ipcheck_set_client_ip(const char *ip);
  */
 int om_ipcheck_ip_in_cidrs(const char *ip, const char *cidr_list);
 
+/* Returns nonzero if the most recent om_ipcheck_authorize() call in this
+ * process denied the client IP.  httpd reads this after authentication to
+ * turn the generic 401 into a 403 with a distinguishing response header so
+ * a client can tell an IP-allowlist denial apart from bad/expired
+ * credentials.  Cleared per request by om_ipcheck_clear_denied().
+ */
+int om_ipcheck_was_denied(void);
+
+/* Clear the per-process IP-denied flag.  Callers (httpd) invoke this once
+ * at the start of each request so the verdict never leaks across requests
+ * on a persistent connection.
+ */
+void om_ipcheck_clear_denied(void);
+
 #endif /* OM_IPCHECK_H */

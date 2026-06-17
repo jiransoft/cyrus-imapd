@@ -35,6 +35,20 @@
 /* effective client IP set by httpd (X-Forwarded-For); empty = unset */
 static char client_ip_override[INET6_ADDRSTRLEN+1] = "";
 
+/* set when the last authorize() denied the client IP; read by httpd to
+   emit a 403 + distinguishing header instead of a generic 401 */
+static int om_ipcheck_denied = 0;
+
+EXPORTED int om_ipcheck_was_denied(void)
+{
+    return om_ipcheck_denied;
+}
+
+EXPORTED void om_ipcheck_clear_denied(void)
+{
+    om_ipcheck_denied = 0;
+}
+
 EXPORTED void om_ipcheck_set_client_ip(const char *ip)
 {
     if (ip && *ip)
@@ -343,6 +357,7 @@ EXPORTED int om_ipcheck_authorize(sasl_conn_t *conn, const char *userid,
                "om_ipcheck: DENY user=<%s> ip=<%s> service=<%s> [%s]",
                userid, ip, config_ident, reply);
         sasl_seterror(conn, 0, "client IP %s not allowed for %s", ip, userid);
+        om_ipcheck_denied = 1;
         return SASL_NOAUTHZ;
     }
 

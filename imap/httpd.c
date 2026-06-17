@@ -1736,6 +1736,11 @@ static int auth_check_hdrs(struct transaction_t *txn, int *sasl_result)
 
     if (txn->flags.redirect) return 0;
 
+    /* Reset the om_ipcheck verdict so an IP-allowlist denial never leaks
+     * across requests on a persistent connection (http_auth below may set
+     * it again via om_ipcheck_authorize). */
+    om_ipcheck_clear_denied();
+
     /* Perform authentication, if necessary */
     if ((hdr = spool_getheader(txn->req_hdrs, "Authorization"))) {
         if (httpd_userid) {
@@ -1767,6 +1772,15 @@ static int auth_check_hdrs(struct transaction_t *txn, int *sasl_result)
                 }
                 else if (r == SASL_FAIL) {
                     ret = HTTP_SERVER_ERROR;
+                }
+                else if (om_ipcheck_was_denied()) {
+                    /* The credentials were fine; the client IP failed the
+                     * per-domain allowlist.  Return 403 (no auth challenge -
+                     * re-authenticating cannot help) so the client can show a
+                     * dedicated "IP blocked" page.  response_header() adds the
+                     * X-OfficeMail-Auth-Error: ip-not-allowed marker. */
+                    ret = HTTP_FORBIDDEN;
+                    txn->error.desc = "Client IP not allowed";
                 }
                 else {
                     ret = HTTP_UNAUTHORIZED;
@@ -3225,6 +3239,13 @@ EXPORTED void response_header(long code, struct transaction_t *txn)
             /* Default handling of success data */
             simple_hdr(txn, "Authentication-Info", "%s", auth_chal->param);
         }
+    }
+
+    /* OfficeMail IP-allowlist denial: mark the 403 so a client can
+     * distinguish it from other 403s and bad/expired credentials (401),
+     * and show a dedicated "IP blocked" page. */
+    if (code == HTTP_FORBIDDEN && om_ipcheck_was_denied()) {
+        simple_hdr(txn, "X-OfficeMail-Auth-Error", "ip-not-allowed");
     }
 
     /* Response Context */
