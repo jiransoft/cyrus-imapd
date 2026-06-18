@@ -212,3 +212,7 @@ sieve/tests/
 stamp-h1
 timsieved/timsieved
 ylwrap
+
+# Ignore everything under .claude except the shared settings file.
+/.claude/*
+!/.claude/settings.json
