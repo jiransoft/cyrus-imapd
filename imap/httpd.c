@@ -1848,13 +1848,15 @@ static int auth_check_hdrs(struct transaction_t *txn, int *sasl_result)
 }
 
 
-static void postauth_check_hdrs(struct transaction_t *txn)
+/* Detect a Cross-Origin Resource Sharing request and set txn->flags.cors.
+ * Factored out of postauth_check_hdrs() so it can also run on the
+ * IP-allowlist deny path, which returns 403 before post-auth processing.
+ * Uses a local buf (not txn->buf) so it is safe to call at any point. */
+static void check_cors(struct transaction_t *txn)
 {
     const char **hdr;
+    struct buf buf = BUF_INITIALIZER;
 
-    if (txn->flags.redirect) return;
-
-    /* Check if this is a Cross-Origin Resource Sharing request */
     if (allow_cors && (hdr = spool_getheader(txn->req_hdrs, "Origin"))) {
         const char *err = NULL;
         xmlURIPtr uri = parse_uri(METH_UNKNOWN, hdr[0], 0, &err);
@@ -1871,28 +1873,38 @@ static void postauth_check_hdrs(struct transaction_t *txn)
                 struct wildmat *wild;
 
                 /* Create URI w/o path or default port */
-                assert(!buf_len(&txn->buf));
-                buf_printf(&txn->buf, "%s://%s",
+                buf_printf(&buf, "%s://%s",
                            lcase(uri->scheme), lcase(uri->server));
                 if (uri->port &&
                     ((o_https && uri->port != 443) ||
                      (!o_https && uri->port != 80))) {
-                    buf_printf(&txn->buf, ":%d", uri->port);
+                    buf_printf(&buf, ":%d", uri->port);
                 }
 
                 /* Check Origin against the 'httpallowcors' wildmat */
                 for (wild = allow_cors; wild->pat; wild++) {
-                    if (wildmat(buf_cstring(&txn->buf), wild->pat)) {
+                    if (wildmat(buf_cstring(&buf), wild->pat)) {
                         /* If we have a non-negative match, allow request */
                         if (!wild->not) txn->flags.cors = CORS_SIMPLE;
                         break;
                     }
                 }
-                buf_reset(&txn->buf);
             }
         }
         xmlFreeURI(uri);
     }
+
+    buf_free(&buf);
+}
+
+static void postauth_check_hdrs(struct transaction_t *txn)
+{
+    const char **hdr;
+
+    if (txn->flags.redirect) return;
+
+    /* Check if this is a Cross-Origin Resource Sharing request */
+    check_cors(txn);
 
     /* Check if we should compress response body
 
@@ -1988,7 +2000,15 @@ EXPORTED int examine_request(struct transaction_t *txn, const char *uri)
     /* Perform check of authentication headers */
     ret = auth_check_hdrs(txn, &sasl_result);
 
-    if (ret && ret != HTTP_UNAUTHORIZED) return ret;
+    if (ret && ret != HTTP_UNAUTHORIZED) {
+        /* An IP-allowlist denial (403) returns here before the normal
+         * post-auth CORS detection below. Run it now so the deny response
+         * still carries Access-Control-Allow-Origin and the exposed
+         * X-OfficeMail-Auth-Error header — otherwise a browser blocks the
+         * cross-origin response and JS cannot read the marker. */
+        check_cors(txn);
+        return ret;
+    }
 
     /* Register service/module and method */
     namespace = txn->req_tgt.namespace;
