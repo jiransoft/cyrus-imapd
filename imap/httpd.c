@@ -3246,6 +3246,9 @@ EXPORTED void response_header(long code, struct transaction_t *txn)
      * and show a dedicated "IP blocked" page. */
     if (code == HTTP_FORBIDDEN && om_ipcheck_was_denied()) {
         simple_hdr(txn, "X-OfficeMail-Auth-Error", "ip-not-allowed");
+        /* Expose to cross-origin JS so a browser client can read the marker
+         * (custom response headers are hidden from fetch/XHR otherwise). */
+        if (txn->flags.cors) Access_Control_Expose("X-OfficeMail-Auth-Error");
     }
 
     /* Response Context */
