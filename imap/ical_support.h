@@ -148,7 +148,7 @@ extern const char *icalproperty_get_xparam_value(icalproperty *prop,
  * user overwrites them in their copy of the resource.
  */
 #define ICAL_PERSONAL_DATA_INITIALIZER         \
-    "CALDATA %(VPATCH {324+}\r\n"         \
+    "CALDATA %(VPATCH {302+}\r\n"         \
     "BEGIN:VPATCH\r\n"                    \
     "VERSION:1\r\n"                       \
     "DTSTAMP:19760401T005545Z\r\n"        \
@@ -156,7 +156,6 @@ extern const char *icalproperty_get_xparam_value(icalproperty *prop,
     "BEGIN:PATCH\r\n"                     \
     "PATCH-TARGET:/VCALENDAR/ANY\r\n"     \
     "PATCH-DELETE:/VALARM\r\n"            \
-    "PATCH-DELETE:#TRANSP\r\n"            \
     "PATCH-DELETE:#X-MOZ-LASTACK\r\n"     \
     "PATCH-DELETE:#X-MOZ-SNOOZE-TIME\r\n" \
     "PATCH-DELETE:#X-APPLE-DEFAULT-ALARM\r\n" \
