@@ -1,0 +1,46 @@
+#!perl
+use Cassandane::Tiny;
+
+sub test_redirect_skip_permanent_failure
+    :want_smtpdaemon
+{
+    my ($self) = @_;
+
+    xlog $self, "Install a script with a permanently-failing target";
+    $self->{instance}->install_sieve_script(<<EOF
+require ["copy"];
+redirect :copy "before\@example.com";
+redirect :copy "dead\@fail.to.deliver";
+redirect :copy "after\@example.com";
+EOF
+    );
+
+    $self->{instance}->getsyslog();
+
+    xlog $self, "Deliver a message";
+    my $msg = $self->{gen}->generate(subject => "Message 1");
+    $self->{instance}->deliver($msg);
+
+    if ($self->{instance}->{have_syslog_replacement}) {
+        my @lines = $self->{instance}->getsyslog();
+
+        xlog $self, "The failed target is skipped and logged";
+        $self->assert_matches(
+            qr/sieve redirect failed permanently: .* to: dead\@fail\.to\.deliver/,
+            "@lines");
+
+        xlog $self, "The remaining targets are still redirected";
+        $self->assert_matches(
+            qr/sieve redirected: .* to: before\@example\.com/, "@lines");
+        $self->assert_matches(
+            qr/sieve redirected: .* to: after\@example\.com/, "@lines");
+    }
+
+    xlog $self, "The message is kept in INBOX flagged \$SieveFailed";
+    my $talk = $self->{store}->get_client();
+    $talk->select("INBOX");
+    $self->assert_num_equals(1, $talk->get_response_code('exists'));
+    my $res = $talk->fetch('1', '(flags)');
+    my @flags = @{$res->{'1'}->{'flags'}};
+    $self->assert(scalar grep { lc($_) eq lc('$SieveFailed') } @flags);
+}

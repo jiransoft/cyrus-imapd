@@ -2725,6 +2725,17 @@ product version in the capabilities
 /* Maximum number of sieve scripts any user may have, enforced at
    submission by timsieved(8). */
 
+{ "sieve_redirect_skip_permanent_failures", 1, SWITCH, "3.12.2" }
+/* If enabled, a sieve redirect whose target is rejected with a
+   permanent (5xx) SMTP error is skipped: the failure is logged, an
+   auditlog "redirect-failed" line is emitted, and the remaining
+   actions still run.  Whenever a target is skipped, the implicit
+   keep is forced back on and the kept copy is flagged $SieveFailed,
+   so the message cannot be lost and the failure stays visible.
+   If disabled, any redirect failure aborts the script and lmtpd
+   falls back to delivering the message to INBOX flagged
+   $SieveFailed (the historical behaviour). */
+
 { "sieve_utf8fileinto", 0, SWITCH, "2.3.17" }
 /* If enabled, the sieve engine expects folder names for the
    \fIfileinto\fR action in scripts to use UTF8 encoding.  Otherwise,

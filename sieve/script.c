@@ -764,6 +764,7 @@ static int do_action_list(sieve_interp_t *interp,
     action_t lastaction = -1;
     int ret = 0;
     int implicit_keep = 1;
+    int redirect_skipped = 0;
 
     strcpy(actions_string,"Action(s) taken:\n");
 
@@ -857,6 +858,16 @@ static int do_action_list(sieve_interp_t *interp,
                 snprintf(actions_string+strlen(actions_string),
                          ACTIONS_STRING_LEN-strlen(actions_string),
                          "Redirected to %s\n", a->u.red.addr);
+            else if (ret == SIEVE_DONE) {
+                /* the callback skipped a permanently-failed target:
+                   note it and carry on with the remaining actions */
+                ret = SIEVE_OK;
+                redirect_skipped = 1;
+                snprintf(actions_string+strlen(actions_string),
+                         ACTIONS_STRING_LEN-strlen(actions_string),
+                         "Skipped redirect to %s (permanent failure)\n",
+                         a->u.red.addr);
+            }
             break;
         case ACTION_DISCARD:
             if (interp->discard) /* discard is optional */
@@ -927,6 +938,15 @@ static int do_action_list(sieve_interp_t *interp,
             implicit_keep = 0;
             break;
         }
+    }
+
+    if (ret == SIEVE_OK && redirect_skipped) {
+        /* at least one redirect target was skipped after a permanent
+           failure: force the implicit keep so the message survives
+           even if another action cancelled it, and flag the kept
+           copy so the failure is visible to the user */
+        implicit_keep = 1;
+        strarray_add(imapflags, "$SieveFailed");
     }
 
     return do_sieve_error(ret, interp,

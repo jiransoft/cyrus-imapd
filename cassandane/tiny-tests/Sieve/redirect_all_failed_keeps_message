@@ -1,0 +1,35 @@
+#!perl
+use Cassandane::Tiny;
+
+sub test_redirect_all_failed_keeps_message
+    :want_smtpdaemon
+{
+    my ($self) = @_;
+
+    xlog $self, "Install a script whose only redirect cancels keep";
+    $self->{instance}->install_sieve_script(<<EOF
+redirect "dead\@fail.to.deliver";
+EOF
+    );
+
+    $self->{instance}->getsyslog();
+
+    xlog $self, "Deliver a message";
+    my $msg = $self->{gen}->generate(subject => "Message 1");
+    $self->{instance}->deliver($msg);
+
+    if ($self->{instance}->{have_syslog_replacement}) {
+        my @lines = $self->{instance}->getsyslog();
+        $self->assert_matches(
+            qr/sieve redirect failed permanently: .* to: dead\@fail\.to\.deliver/,
+            "@lines");
+    }
+
+    xlog $self, "The forced implicit keep leaves the message in INBOX";
+    my $talk = $self->{store}->get_client();
+    $talk->select("INBOX");
+    $self->assert_num_equals(1, $talk->get_response_code('exists'));
+    my $res = $talk->fetch('1', '(flags)');
+    my @flags = @{$res->{'1'}->{'flags'}};
+    $self->assert(scalar grep { lc($_) eq lc('$SieveFailed') } @flags);
+}

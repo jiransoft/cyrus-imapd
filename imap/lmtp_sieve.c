@@ -747,7 +747,9 @@ static int list_addresses(void *rock, struct carddav_data *cdata)
 static int send_forward(sieve_redirect_context_t *rc,
                         struct sieve_interp_ctx *ctx,
                         char *return_path,
-                        struct protstream *file)
+                        struct protstream *file,
+                        unsigned *smtp_code,
+                        char **resp_text)
 {
     int r = 0;
     char buf[1024];
@@ -841,6 +843,15 @@ static int send_forward(sieve_redirect_context_t *rc,
     smtpclient_set_ret(sm, rc->dsn_ret);
     smtpclient_set_by(sm, rc->deliverby);
     r = smtpclient_send(sm, &sm_env, &msgbuf);
+    if (r) {
+        /* only trust the response code for a single-recipient
+         * envelope: with several recipients the last response seen
+         * may belong to another recipient than the failing one */
+        if (smtp_code && sm_env.rcpts.count == 1)
+            *smtp_code = smtpclient_get_resp_code(sm);
+        if (resp_text)
+            *resp_text = xstrdupnull(smtpclient_get_resp_text(sm));
+    }
     smtpclient_close(&sm);
 
 done:
@@ -860,6 +871,8 @@ static int sieve_redirect(void *ac, void *ic,
     message_data_t *m = mdata->m;
     char buf[8192], *sievedb = NULL;
     duplicate_key_t dkey = DUPLICATE_INITIALIZER;
+    unsigned smtp_code = 0;
+    char *resp_text = NULL;
     int res;
 
     /* if we have a msgid, we can track our redirects */
@@ -883,7 +896,8 @@ static int sieve_redirect(void *ac, void *ic,
         else m = mdata->m;
     }
 
-    res = send_forward(rc, ctx, m->return_path, m->data);
+    res = send_forward(rc, ctx, m->return_path, m->data,
+                       &smtp_code, &resp_text);
 
     if (rc->headers) cleanup_special_delivery(mdata);
 
@@ -900,11 +914,41 @@ static int sieve_redirect(void *ac, void *ic,
                    session_id(), m->id ? m->id : "<nomsgid>", rc->addr, ctx->userid);
         return SIEVE_OK;
     } else {
+        const char *reason;
+
         if (res == -1) {
             *errmsg = "Could not spawn sendmail process";
         } else {
             *errmsg = error_message(res);
         }
+        reason = resp_text ? resp_text : *errmsg;
+
+        if (smtp_code >= 500 && smtp_code < 600 &&
+            config_getswitch(
+                IMAPOPT_SIEVE_REDIRECT_SKIP_PERMANENT_FAILURES)) {
+            /* The target was rejected permanently (5xx): retrying
+             * can not succeed, so skip this target and let the
+             * remaining actions run.  Any other failure still fails
+             * the script; lmtpd then falls back to delivering the
+             * message to INBOX flagged $SieveFailed. */
+            syslog(LOG_ERR,
+                   "sieve redirect failed permanently: %s to: %s"
+                   " (code=%u %s)",
+                   m->id ? m->id : "<nomsgid>", rc->addr,
+                   smtp_code, reason);
+            if (config_auditlog)
+                syslog(LOG_NOTICE,
+                       "auditlog: redirect-failed sessionid=<%s>"
+                       " message-id=%s target=<%s> userid=<%s>"
+                       " code=<%u> error=<%s>",
+                       session_id(), m->id ? m->id : "<nomsgid>",
+                       rc->addr, ctx->userid ? ctx->userid : "",
+                       smtp_code, reason);
+            free(resp_text);
+            return SIEVE_DONE;
+        }
+
+        free(resp_text);
         return SIEVE_FAIL;
     }
 }
