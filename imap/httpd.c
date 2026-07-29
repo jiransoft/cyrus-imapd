@@ -1775,12 +1775,27 @@ static int auth_check_hdrs(struct transaction_t *txn, int *sasl_result)
                 }
                 else if (om_ipcheck_was_denied()) {
                     /* The credentials were fine; the client IP failed the
-                     * per-domain allowlist.  Return 403 (no auth challenge -
-                     * re-authenticating cannot help) so the client can show a
-                     * dedicated "IP blocked" page.  response_header() adds the
-                     * X-OfficeMail-Auth-Error: ip-not-allowed marker. */
+                     * per-domain allowlist.  The verdict arrives via a
+                     * per-process side channel because the check runs inside
+                     * the SASL proxy-policy callback (global.c), which has no
+                     * transaction in scope - transfer it onto the txn so the
+                     * response path reads per-txn state only.  Return 403 (no
+                     * auth challenge - re-authenticating cannot help) so the
+                     * client can show a dedicated "IP blocked" page.
+                     * response_header() adds the X-OfficeMail-Auth-Error:
+                     * ip-not-allowed marker. */
+                    txn->flags.om_deny = OM_DENY_IP;
                     ret = HTTP_FORBIDDEN;
                     txn->error.desc = "Client IP not allowed";
+                }
+                else if (txn->flags.om_deny == OM_DENY_USER) {
+                    /* The token was valid; the account is in user_deny.db.
+                     * Return 403 (no auth challenge - re-authenticating
+                     * cannot help) so the client can show a dedicated
+                     * "account disabled" page.  response_header() adds the
+                     * X-OfficeMail-Auth-Error: account-disabled marker. */
+                    ret = HTTP_FORBIDDEN;
+                    txn->error.desc = "Account access is disabled";
                 }
                 else {
                     ret = HTTP_UNAUTHORIZED;
@@ -3261,11 +3276,13 @@ EXPORTED void response_header(long code, struct transaction_t *txn)
         }
     }
 
-    /* OfficeMail IP-allowlist denial: mark the 403 so a client can
-     * distinguish it from other 403s and bad/expired credentials (401),
-     * and show a dedicated "IP blocked" page. */
-    if (code == HTTP_FORBIDDEN && om_ipcheck_was_denied()) {
-        simple_hdr(txn, "X-OfficeMail-Auth-Error", "ip-not-allowed");
+    /* OfficeMail IP-allowlist / user_deny denial: mark the 403 so a client
+     * can distinguish it from other 403s and bad/expired credentials (401),
+     * and show a dedicated "IP blocked" / "account disabled" page. */
+    if (code == HTTP_FORBIDDEN && txn->flags.om_deny) {
+        simple_hdr(txn, "X-OfficeMail-Auth-Error",
+                   txn->flags.om_deny == OM_DENY_IP ?
+                   "ip-not-allowed" : "account-disabled");
         /* Expose to cross-origin JS so a browser client can read the marker
          * (custom response headers are hidden from fetch/XHR otherwise). */
         if (txn->flags.cors) Access_Control_Expose("X-OfficeMail-Auth-Error");
@@ -4523,14 +4540,28 @@ static int http_auth(const char *creds, struct transaction_t *txn)
         httpd_extradomain = NULL;
         httpd_authstate = auth_newstate(user);
 
+        int userisadmin = global_authisa(httpd_authstate, IMAPOPT_ADMINS);
+
         /* OfficeMail per-domain client-IP allowlist check */
-        status = om_ipcheck_authorize(httpd_saslconn, user,
-                                      global_authisa(httpd_authstate,
-                                                     IMAPOPT_ADMINS));
+        status = om_ipcheck_authorize(httpd_saslconn, user, userisadmin);
         if (status) {
             auth_freestate(httpd_authstate);
             httpd_authstate = NULL;
             return status;
+        }
+
+        /* Bearer skips the SASL authorization callback (global.c
+         * mysasl_proxy_policy), which is where every SASL-based login
+         * enforces user_deny.db - without this check a denied account
+         * keeps full JMAP/DAV access for as long as its token stays
+         * valid.  Admins are exempt, matching the SASL path. */
+        if (!userisadmin && userdeny(user, config_ident, NULL, 0)) {
+            syslog(LOG_ERR, "user '%s' denied access to service '%s'",
+                   user, config_ident);
+            txn->flags.om_deny = OM_DENY_USER;
+            auth_freestate(httpd_authstate);
+            httpd_authstate = NULL;
+            return SASL_NOAUTHZ;
         }
     }
     else {

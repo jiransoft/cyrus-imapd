@@ -325,6 +325,7 @@ struct txn_flags_t {
     unsigned long trailer  : 3;         /* Headers which will be in trailer */
     unsigned long redirect : 1;         /* CGI local redirect */
     unsigned long retry    : 1;         /* Retry-After */
+    unsigned long om_deny  : 2;         /* OfficeMail auth-denial verdict */
 };
 
 /* HTTP connection context */
@@ -482,6 +483,15 @@ enum {
     TRAILER_CMD5 =      (1<<0), /* Content-MD5 will be generated */
     TRAILER_CTAG =      (1<<1), /* CTag will be returned */
     TRAILER_PROXY =     (1<<2)  /* Trailer(s) will be proxied from origin */
+};
+
+/* OfficeMail auth-denial verdict flags (txn.flags.om_deny) - why an
+ * authenticated request was refused, so the 403 response can carry a
+ * distinguishing X-OfficeMail-Auth-Error marker */
+enum {
+    OM_DENY_NONE =      0,
+    OM_DENY_IP =        1,      /* client IP failed the per-domain allowlist */
+    OM_DENY_USER =      2       /* account is listed in user_deny.db */
 };
 
 typedef int (*premethod_proc_t)(struct transaction_t *txn);
