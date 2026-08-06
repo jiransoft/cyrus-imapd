@@ -1347,10 +1347,17 @@ EXPORTED int caldav_writeical(struct caldav_db *caldavdb, struct caldav_data *cd
 
     cdata->organizer = NULL;
 
-    /* Get organizer */
+    /* Get organizer.  icalproperty_get_decoded_calendaraddress() hands back a
+       string owned by libical's temporary buffer ring, which is recycled once
+       enough temporaries have been allocated - so it must not be stored in
+       cdata, whose lifetime outlives this call (callers pass the organizer on
+       to sched_request(), and we bind it into the database below).  Park it in
+       the db's own buffer, exactly as the read path does. */
     prop = icalcomponent_get_first_property(comp, ICAL_ORGANIZER_PROPERTY);
     if (prop) {
-        cdata->organizer = icalproperty_get_decoded_calendaraddress(prop);
+        cdata->organizer =
+            text_to_buf(icalproperty_get_decoded_calendaraddress(prop),
+                        &caldavdb->organizer);
     }
     /* maybe it's only on a sub event */
     icalcomponent *nextcomp;
@@ -1358,7 +1365,9 @@ EXPORTED int caldav_writeical(struct caldav_db *caldavdb, struct caldav_data *cd
            (nextcomp = icalcomponent_get_next_component(ical, kind))) {
         prop = icalcomponent_get_first_property(nextcomp, ICAL_ORGANIZER_PROPERTY);
         if (prop) {
-            cdata->organizer = icalproperty_get_decoded_calendaraddress(prop);
+            cdata->organizer =
+                text_to_buf(icalproperty_get_decoded_calendaraddress(prop),
+                            &caldavdb->organizer);
         }
     }
 
@@ -1397,8 +1406,13 @@ EXPORTED int caldav_writeical(struct caldav_db *caldavdb, struct caldav_data *cd
     span = icalrecurrenceset_get_utc_timespan(ical, kind, NULL, &recurring,
                                               &check_mattach_cb, &mattach);
 
-    cdata->dtstart = icaltime_as_ical_string(span.start);
-    cdata->dtend = icaltime_as_ical_string(span.end);
+    /* Same temporary-buffer caveat as the organizer above: these come out of
+       libical's ring, and the property lookups between here and caldav_write()
+       keep allocating from it. */
+    cdata->dtstart = text_to_buf(icaltime_as_ical_string(span.start),
+                                 &caldavdb->dtstart);
+    cdata->dtend = text_to_buf(icaltime_as_ical_string(span.end),
+                               &caldavdb->dtend);
     cdata->comp_flags.recurring = recurring;
     cdata->comp_flags.mattach = mattach;
 

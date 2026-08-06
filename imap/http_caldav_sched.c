@@ -2555,6 +2555,17 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
     icalcomponent *myoldical = NULL;
     icalcomponent *mynewical = NULL;
 
+    /* Callers typically obtain 'organizer' from
+       icalproperty_get_decoded_calendaraddress(), which returns a string owned
+       by libical's temporary buffer ring.  Fanning out to the attendees below
+       consumes hundreds of those buffers per attendee, so on a large event the
+       ring wraps around and frees the caller's string while we are still using
+       it - every message sent after that point would carry a stale address
+       (another attendee's, or worse) as its originator.  Work from our own
+       copy for the whole fan-out. */
+    char *myorganizer = xstrdupnull(organizer);
+    organizer = myorganizer;
+
     if (!sched_userid) sched_userid = cal_ownerid;
 
     mbentry_t *mbentry = NULL;
@@ -2577,6 +2588,7 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
 
         update_attendee_status(newical, NULL, NULL, SCHEDSTAT_NOPRIVS);
 
+        free(myorganizer);
         return;
     }
 
@@ -2644,6 +2656,7 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
     if (myoldical) icalcomponent_free(myoldical);
     if (mynewical) icalcomponent_free(mynewical);
     free_hash_table(&attendees, NULL);
+    free(myorganizer);
 }
 
 /*******************************************************************/

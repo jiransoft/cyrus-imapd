@@ -1,0 +1,91 @@
+#!perl
+use Cassandane::Tiny;
+
+#
+# Fanning out a large invitation must not corrupt the iTIP originator.
+#
+# The organizer address callers hand to sched_request() used to come straight
+# out of libical's temporary buffer ring; scheduling each attendee allocates
+# hundreds of those, so once the ring wrapped (2500 allocations) the string was
+# freed and reused, and every later iMIP message went out with another
+# attendee's address - or raw freed bytes - as its sender.  The threshold was
+# around 26 attendees for a fresh invitation and 19 for an update.
+#
+sub test_itip_many_attendees_originator
+{
+    my ($self) = @_;
+
+    my $CalDAV = $self->{caldav};
+
+    my $CalendarId = $CalDAV->NewCalendar({name => 'bigmeeting'});
+    $self->assert_not_null($CalendarId);
+
+    my $uuid = "1a2b3c4d-0000-4000-8000-abcdefabcdef";
+    my $href = "$CalendarId/$uuid.ics";
+
+    my $nattendees = 60;
+    my $attendees = '';
+    for my $i (1 .. $nattendees) {
+        my $addr = sprintf('attendee%03d@example.com', $i);
+        $attendees .= "ATTENDEE;CN=Attendee $i;ROLE=OPT-PARTICIPANT;" .
+                      "PARTSTAT=NEEDS-ACTION;RSVP=TRUE:MAILTO:$addr\n";
+    }
+
+    my $card = <<EOF;
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Cassandane//itip-fanout//EN
+CALSCALE:GREGORIAN
+BEGIN:VEVENT
+CREATED:20260101T000000Z
+UID:$uuid
+DTSTAMP:20260101T000000Z
+DTSTART:20260601T060000Z
+DTEND:20260601T070000Z
+RRULE:FREQ=MONTHLY;BYDAY=TH;BYSETPOS=1
+TRANSP:OPAQUE
+SUMMARY:Big Meeting
+SEQUENCE:0
+ATTENDEE;CN=Test User;PARTSTAT=ACCEPTED:MAILTO:cassandane\@example.com
+$attendees
+ORGANIZER;CN=Test User:MAILTO:cassandane\@example.com
+END:VEVENT
+END:VCALENDAR
+EOF
+
+    xlog $self, "fresh invitation to $nattendees attendees";
+    $CalDAV->Request('PUT', $href, $card, 'Content-Type' => 'text/calendar');
+    $self->assert_itip_senders_are("cassandane\@example.com");
+
+    xlog $self, "update of the same event";
+    my $upd = $card;
+    $upd =~ s/SEQUENCE:0/SEQUENCE:1/;
+    $upd =~ s/DTSTART:20260601T060000Z/DTSTART:20260601T080000Z/;
+    $upd =~ s/DTEND:20260601T070000Z/DTEND:20260601T090000Z/;
+    $CalDAV->Request('PUT', $href, $upd, 'Content-Type' => 'text/calendar');
+    $self->assert_itip_senders_are("cassandane\@example.com");
+
+    # The stored organizer must survive too - it used to share the same
+    # temporary buffer, so a corrupted value could reach the database.
+    my $res = $CalDAV->Request('GET', $href);
+    $self->assert_matches(qr/ORGANIZER[^\r\n]*mailto:cassandane\@example\.com/i,
+                          $res->{content});
+}
+
+# Assert that every iMIP notification queued since the last check names
+# exactly $want as its sender.
+sub assert_itip_senders_are
+{
+    my ($self, $want) = @_;
+
+    my @imip = grep { $_->{METHOD} eq 'imip' && length($_->{MESSAGE} // '') }
+               @{$self->{instance}->getnotify()};
+    $self->assert_num_gte(1, scalar @imip);
+
+    my %senders;
+    foreach my $notif (@imip) {
+        my $payload = decode_json($notif->{MESSAGE});
+        $senders{$payload->{sender} // '(none)'}++;
+    }
+    $self->assert_deep_equals([$want], [sort keys %senders]);
+}
