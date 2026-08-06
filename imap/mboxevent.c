@@ -744,10 +744,13 @@ static void mboxevent_dispatch_event(struct mboxevent *event)
         /* notification is ready to send */
         json_t *jevent = json_formatter(type, event->params);
 
-        if (notifier && (type & enabled_events)) {
-            /* check if expected event parameters are filled */
-            assert(filled_params(type, event));
-
+        /* check if expected event parameters are filled; if not,
+         * skip the notification (filled_params syslogs which ones
+         * are missing). This used to assert: a malformed
+         * notification must not SIGABRT a live imapd/httpd
+         * mid-operation and leave the mailbox half-committed. */
+        if (notifier && (type & enabled_events) &&
+            filled_params(type, event)) {
             formatted_message = json_dumps(jevent,
                                            JSON_PRESERVE_ORDER|JSON_COMPACT);
             /* notify() returns -1 when the unix-domain datagram is
@@ -857,6 +860,28 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
             seqset_reset(event->uidset);
             while (seqset_getnext(event->uidset)) total++;
         }
+
+        /* midset must hold exactly one entry per uidset record (the
+         * build sites append "NIL" placeholders to keep it so). The
+         * chunker's padding backstop below keeps a lockstep break
+         * from dropping an event, but it would do so silently —
+         * surface the break here so it gets fixed at the source
+         * instead of being papered over with "NIL" placeholders.
+         * Only checked when midset is expected for this event type
+         * (otherwise midset is legitimately empty) and a uidset is
+         * present (MessageNew/MessageAppend keep one midset entry
+         * but mboxevent_extract_mailbox drops their uidset). */
+        if (event->uidset &&
+            mboxevent_expected_param(event->type, EVENT_MIDSET) &&
+            strarray_size(&event->midset) != total) {
+            syslog(LOG_ERR, "mboxevent: midset/uidset desync for event"
+                   " type 0x%x on %s: %d message-ids for %d uids",
+                   event->type,
+                   event->params[EVENT_URI].filled ?
+                       event->params[EVENT_URI].value.s : "<unknown mailbox>",
+                   strarray_size(&event->midset), total);
+        }
+
         int do_chunk = (event->type & BULK_RECORD_EVENTS) &&
                        total > CYRUS_EVENT_CHUNK_SIZE &&
                        strarray_size(&event->midset) > 0;
@@ -920,15 +945,28 @@ EXPORTED void mboxevent_notify(struct mboxevent **mboxevents)
                 event->olduidset = chunk_olduidset;
             }
 
-            /* midset may be shorter than uidset due to strarray_add
-             * deduping Message-Ids; the tail chunk's midset truncates
-             * to whatever remains. */
+            /* midset is built with strarray_append — one entry per
+             * record, positionally parallel to uidset — so this
+             * slice matches [start, end) exactly. Clamp anyway so a
+             * short midset can never be read past its end; the
+             * padding below then restores the slice length. */
             memset(&event->midset, 0, sizeof(strarray_t));
             mstart = (start < midset_size) ? start : midset_size;
             mend   = (end   < midset_size) ? end   : midset_size;
             for (i = mstart; i < mend; i++)
                 strarray_append(&event->midset,
                                 strarray_nth(&orig_midset, i));
+
+            /* Last-resort backstop: pad to exactly end - start
+             * entries. Unreachable while every build site appends
+             * one entry per record, but if a future caller breaks
+             * that lockstep this degrades into a well-formed event
+             * with placeholder Message-Ids instead of an empty
+             * midset that dispatch would silently skip. "NIL" is a
+             * pre-existing midset value (messages without a
+             * Message-Id), not new wire vocabulary. */
+            while (strarray_size(&event->midset) < end - start)
+                strarray_append(&event->midset, "NIL");
 
             /* Drop prior chunk's UIDSET / OLD_UIDSET (slot-owned
              * strings allocated by seqset_cstring), MIDSET (value.a
@@ -1202,10 +1240,15 @@ EXPORTED void mboxevent_extract_record(struct mboxevent *event, struct mailbox *
     if (event->type == EVENT_CANCELLED)
         return;
 
-    /* add Message-Id to midset or NIL if doesn't exists */
+    /* add Message-Id to midset or NIL if doesn't exists.
+     * strarray_append, not strarray_add: strarray_add dedups (every
+     * missing Message-Id collapses into one "NIL"), but the bulk
+     * chunker in mboxevent_notify slices midset by the same
+     * [start, end) window as uidset, so midset must stay
+     * positionally parallel — one entry per record. */
     if (mboxevent_expected_param(event->type, (EVENT_MIDSET))) {
         msgid = mailbox_cache_get_env(mailbox, record, ENV_MSGID);
-        strarray_add(&event->midset, msgid ? msgid : "NIL");
+        strarray_append(&event->midset, msgid ? msgid : "NIL");
 
         if (msgid)
             free(msgid);
@@ -1366,14 +1409,22 @@ EXPORTED void mboxevent_extract_msgrecord(struct mboxevent *event, msgrecord_t *
     if (event->type == EVENT_CANCELLED)
         return;
 
-    /* add Message-Id to midset or NIL if doesn't exists */
+    /* add Message-Id to midset or NIL if doesn't exists.
+     * strarray_append, not strarray_add: strarray_add dedups (every
+     * missing Message-Id collapses into one "NIL"), but the bulk
+     * chunker in mboxevent_notify slices midset by the same
+     * [start, end) window as uidset, so midset must stay
+     * positionally parallel — one entry per record. */
     if (mboxevent_expected_param(event->type, (EVENT_MIDSET))) {
         char *msgid = NULL;
         if ((r = msgrecord_get_cache_env(msgrec, ENV_MSGID, &msgid))) {
             syslog(LOG_ERR, "mboxevent: can't extract msgid: %s", error_message(r));
+            /* the UID is already in uidset; append a placeholder so
+             * midset stays in lockstep before bailing out */
+            strarray_append(&event->midset, "NIL");
             return;
         }
-        strarray_add(&event->midset, msgid ? msgid : "NIL");
+        strarray_append(&event->midset, msgid ? msgid : "NIL");
         free(msgid);
     }
 
