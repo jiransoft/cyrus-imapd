@@ -446,17 +446,26 @@ docker-compose exec cyrus-dev bash -c "cat /tmp/cass/*/reconstruct.out"
 
 ## 알려진 이슈
 
-### INCONSISTENCIES FOUND IN SPOOL
+### INCONSISTENCIES FOUND IN SPOOL (해결됨)
 
-일부 테스트에서 `INCONSISTENCIES FOUND IN SPOOL` 오류가 발생할 수 있습니다.
-이는 Cassandane의 엄격한 검증 때문이며, 대부분의 경우 테스트 기능 자체는 정상 작동합니다.
+메일을 append하는 모든 테스트가 tear_down에서 `INCONSISTENCIES FOUND IN SPOOL`로
+실패하던 문제입니다. 이 포크의 reconstruct는 `-G`에서 internaldate를 의도적으로
+다시 쓰면서 처리한 메시지마다 "setting internaldate from Date header"를 출력하는데,
+`Cassandane/Instance.pm`의 `_check_sanity`가 reconstruct.out의 모든 출력을
+불일치로 간주했습니다.
 
-reconstruct.out에서 "setting internaldate from Date header" 메시지가 나타나는 것은
-정상이며, 실제 기능에는 영향을 주지 않습니다.
+`_check_sanity`가 해당 라인과 빈 줄을 무시하도록 수정되어 더 이상 발생하지
+않습니다. 다른 사유로 이 오류가 나온다면 reconstruct.out / quota.out의 실제
+내용을 확인하십시오.
 
-테스트가 의도한 대로 작동했는지 확인하려면:
-- syslog에서 JMAP 호출이 HTTP 200 OK로 성공했는지 확인
-- reconstruct.out에서 예상한 수의 이메일이 생성되었는지 확인
+### 러너가 아무 출력 없이 종료 (해결됨)
+
+Debian bookworm의 `libtest-unit-perl` 0.25-7은 `can()` 체크 없이 리스너의
+`end_suite`를 호출하는데 `Cassandane/Unit/Formatter.pm`에는 `start_suite`만
+있어서, 모든 실행이 **exit 25 + 출력 0바이트**로 죽었습니다. 실패가 아니라
+"러너가 아무것도 안 한 것"처럼 보이므로 원인 파악이 어렵습니다.
+
+`Formatter.pm`에 no-op `end_suite` 스텁이 추가되어 해결되었습니다.
 
 ## 참고 자료
 

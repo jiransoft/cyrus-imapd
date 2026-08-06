@@ -1559,6 +1559,11 @@ sub _check_sanity
         next unless open(FH, "<$basedir/$file");
         while (<FH>) {
             next unless $_;
+            next if m/^\s*$/;
+            # 9folders fork: reconstruct -G deliberately rewrites
+            # internaldate and reports every message it touches, so this
+            # line is expected output, not an inconsistency.
+            next if m/setting internaldate from (normalized )?Date header/;
             $found = 1;
             xlog "INCONSISTENCY FOUND: $file $_";
         }

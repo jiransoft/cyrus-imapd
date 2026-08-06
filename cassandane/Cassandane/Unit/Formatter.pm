@@ -73,6 +73,15 @@ sub start_suite
     my ($self, $suite) = @_;
 }
 
+# Test::Unit 0.25-7 (Debian bookworm) tells listeners about end_suite
+# without a can() guard.  Without this stub every run dies with exit 25
+# and no output at all, which reads as "the runner did nothing" rather
+# than as a failure.
+sub end_suite
+{
+    my ($self, $suite) = @_;
+}
+
 sub start_test
 {
     my ($self, $test) = @_;
