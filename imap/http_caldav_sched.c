@@ -826,6 +826,7 @@ int sched_busytime_query(struct transaction_t *txn,
     icalcomponent *comp;
     icalproperty *prop = NULL, *next;
     const char *uid = NULL, *organizer = NULL;
+    char *myorganizer = NULL;
     struct caldav_sched_param sparam;
     struct auth_state *org_authstate = NULL;
     xmlNodePtr root = NULL;
@@ -843,7 +844,12 @@ int sched_busytime_query(struct transaction_t *txn,
     uid = icalcomponent_get_uid(comp);
 
     prop = icalcomponent_get_first_property(comp, ICAL_ORGANIZER_PROPERTY);
-    organizer = icalproperty_get_decoded_calendaraddress(prop);
+    /* Copy: this comes out of libical's temporary buffer ring, and we keep
+       using it once per attendee below - where each iteration scans that
+       attendee's calendar, allocating temporaries as it goes.  A wrapped ring
+       would put a freed string into the VFREEBUSY reply's ORGANIZER. */
+    myorganizer = xstrdupnull(icalproperty_get_decoded_calendaraddress(prop));
+    organizer = myorganizer;
 
     /* XXX  Do we need to do more checks here? */
     if (caladdress_lookup(organizer, &sparam, NULL) ||
@@ -1045,6 +1051,7 @@ int sched_busytime_query(struct transaction_t *txn,
     if (org_authstate) auth_freestate(org_authstate);
     if (calfilter.freebusy.fb) free(calfilter.freebusy.fb);
     if (root) xmlFreeDoc(root->doc);
+    free(myorganizer);
 
     return ret;
 }
