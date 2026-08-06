@@ -2664,12 +2664,24 @@ void sched_request(const char *cal_ownerid, const char *sched_userid,
 
 struct reply_data {
     icalcomponent *itip;
-    const char *organizer;
+    char *organizer;            /* owned - see reply_set_organizer() */
     strarray_t *didparts;
     int master_send;
     int do_send;
     icalparameter_scheduleforcesend force_send;
 };
+
+/* Remember the organizer we will reply to.  get_organizer() returns a string
+   owned by libical's temporary buffer ring, and the helpers below keep walking
+   the event (find_attendee() burns one temporary per attendee, per override)
+   before sched_deliver() uses this value as the REPLY's recipient - so the ring
+   can wrap and free it in between.  Keep our own copy. */
+static void reply_set_organizer(struct reply_data *reply, const char *organizer)
+{
+    char *copy = xstrdupnull(organizer);
+    free(reply->organizer);
+    reply->organizer = copy;
+}
 
 
 /*
@@ -2886,7 +2898,7 @@ static void schedule_sub_replies(const char *attendee,
 
         /* XXX - test for changed between recurrences and error out?  Any point? */
         reply->force_send = force_send;
-        reply->organizer = organizer;
+        reply_set_organizer(reply, organizer);
 
         /* we need to send an update for this recurrence */
         icalcomponent *copy = icalcomponent_clone(comp);
@@ -2917,7 +2929,7 @@ static void schedule_full_decline(const char *attendee,
     icalcomponent *mastercomp = find_attended_component(oldical, "", attendee);
     if (!mastercomp) return;
 
-    reply->organizer = get_organizer(mastercomp);
+    reply_set_organizer(reply, get_organizer(mastercomp));
     if (!reply->organizer) return;
 
     /* we need to send a reply for this recurrence for sure, because we know that the
@@ -2962,7 +2974,7 @@ static void schedule_full_reply(const char *attendee,
         return;
     }
 
-    reply->organizer = get_organizer(mastercomp);
+    reply_set_organizer(reply, get_organizer(mastercomp));
     if (!reply->organizer) return;
 
     kind = icalcomponent_isa(mastercomp);
@@ -3092,6 +3104,7 @@ void sched_reply(const char *cal_ownerid, const char *sched_userid,
 
         if (reply.didparts) strarray_free(reply.didparts);
         if (reply.itip) icalcomponent_free(reply.itip);
+        free(reply.organizer);
     }
 
     if (myoldical) icalcomponent_free(myoldical);
