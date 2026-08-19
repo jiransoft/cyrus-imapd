@@ -359,6 +359,7 @@ MsgData **index_msgdata_load(struct index_state *state, unsigned *msgno_list, in
                              const struct sortcrit *sortcrit,
                              unsigned int anchor, int *found_anchor);
 extern int index_search_evaluate(struct index_state *state, const search_expr_t *e, uint32_t msgno);
+extern int index_honour_skip_archived;
 
 extern int index_expunge(struct index_state *state, const char *uidsequence,
                          int need_deleted);

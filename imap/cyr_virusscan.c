@@ -323,6 +323,11 @@ int main (int argc, char *argv[])
 
     cyrus_init(alt_config, "cyr_virusscan", 0, CONFIG_NEED_PARTITION_DATA);
 
+    /* Targeted removal has to see every message: an admin purging a phishing
+     * campaign must not be told it succeeded while every archived copy stays
+     * put. Opt out of the search_skip_archived shortcut. */
+    index_honour_skip_archived = 0;
+
     memset(&srock, 0, sizeof(struct scan_rock));
 
     if (email_notification) {

@@ -5987,39 +5987,6 @@ static int _snippet_get(jmap_req_t *req, json_t *filter,
     *snippets = json_array();
     *notfound = json_array();
 
-    if (!search_engine()->begin_snippets) {
-        /* No search backend to highlight with. A snippet with null subject and
-         * preview is a valid answer; failing the whole method is not. */
-        json_array_foreach(messageids, i, val) {
-            const char *msgid = json_string_value(val);
-            uint32_t uid = 0;
-
-            r = jmap_email_find(req, NULL, msgid, &mboxname, &uid);
-            free(mboxname);
-            mboxname = NULL;
-            if (r) {
-                if (r == IMAP_NOTFOUND)
-                    json_array_append_new(*notfound, json_string(msgid));
-                r = 0;
-                continue;
-            }
-
-            snippet = json_object();
-            json_object_set_new(snippet, "emailId", json_string(msgid));
-            json_object_set_new(snippet, "subject", json_null());
-            json_object_set_new(snippet, "preview", json_null());
-            json_object_set_new(snippet, "attachments", json_object());
-            json_array_append_new(*snippets, snippet);
-            snippet = NULL;
-        }
-
-        if (!json_array_size(*notfound)) {
-            json_decref(*notfound);
-            *notfound = json_null();
-        }
-        goto done;
-    }
-
     /* Set up custom search text receiver */
     struct snippet_receiver sr = {
         {
@@ -6041,6 +6008,44 @@ static int _snippet_get(jmap_req_t *req, json_t *filter,
         },
         NULL, NULL, NULL, 0, BUF_INITIALIZER, NULL
     };
+
+    /* This guard has to sit AFTER sr is initialised: the cleanup at done:
+     * calls buf_free(&sr.buf), and a goto that jumps over sr's initialiser
+     * would leave it indeterminate - freeing a garbage pointer and corrupting
+     * the heap, which showed up as httpd dying with SIGSEGV or SIGABRT some
+     * time after the response had already been sent. */
+    if (!search_engine()->begin_snippets) {
+        /* No search backend to highlight with. A snippet with null subject and
+         * preview is a valid answer; failing the whole method is not. */
+        json_array_foreach(messageids, i, val) {
+            const char *msgid = json_string_value(val);
+            uint32_t uid = 0;
+
+            r = jmap_email_find(req, NULL, msgid, &mboxname, &uid);
+            free(mboxname);
+            mboxname = NULL;
+            if (r) {
+                if (r == IMAP_NOTFOUND)
+                    json_array_append_new(*notfound, json_string(msgid));
+                r = 0;
+                continue;
+            }
+
+            snippet = json_object();
+            json_object_set_new(snippet, "emailId", json_string(msgid));
+            json_object_set_new(snippet, "subject", json_null());
+            json_object_set_new(snippet, "preview", json_null());
+            json_object_set_new(snippet, "attachments", json_null());
+            json_array_append_new(*snippets, snippet);
+            snippet = NULL;
+        }
+
+        if (!json_array_size(*notfound)) {
+            json_decref(*notfound);
+            *notfound = json_null();
+        }
+        goto done;
+    }
 
     /* Build searchargs */
     searchargs = new_searchargs(NULL/*tag*/, GETSEARCH_CHARSET_FIRST,

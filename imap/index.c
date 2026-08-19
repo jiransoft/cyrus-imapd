@@ -5310,6 +5310,10 @@ out:
 }
 
 
+/* Cleared by tools that must evaluate every message regardless of
+ * search_skip_archived. See index_search_evaluate(). */
+EXPORTED int index_honour_skip_archived = 1;
+
 /*
  * Evaluate a searchargs structure on a msgno
  */
@@ -5329,8 +5333,14 @@ EXPORTED int index_search_evaluate(struct index_state *state,
      * storage that an unindexed search must not be allowed to walk. Drop the
      * whole record rather than just the body term: skipping only the term
      * would make it a non-match, and a non-match flips to a match under NOT,
-     * so "NOT BODY x" would return every archived message. */
-    if (config_getswitch(IMAPOPT_SEARCH_SKIP_ARCHIVED) &&
+     * so "NOT BODY x" would return every archived message.
+     *
+     * index_honour_skip_archived lets a caller that must see every message -
+     * cyr_virusscan's targeted removal, say - opt out. A search that silently
+     * skipped the archive there would report a phishing campaign purged while
+     * leaving every copy older than archive_after in place. */
+    if (index_honour_skip_archived &&
+        config_getswitch(IMAPOPT_SEARCH_SKIP_ARCHIVED) &&
         (im->internal_flags & FLAG_INTERNAL_ARCHIVED) &&
         search_expr_max_cost(e) >= SEARCH_COST_BODY)
         return 0;
