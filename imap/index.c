@@ -5324,6 +5324,17 @@ EXPORTED int index_search_evaluate(struct index_state *state,
     if (always < 0) return 0;
     if (always > 0) return 1;
 
+    /* A body-class criterion has to map the message file, and for an archived
+     * record that file lives on the archive partition - possibly remote
+     * storage that an unindexed search must not be allowed to walk. Drop the
+     * whole record rather than just the body term: skipping only the term
+     * would make it a non-match, and a non-match flips to a match under NOT,
+     * so "NOT BODY x" would return every archived message. */
+    if (config_getswitch(IMAPOPT_SEARCH_SKIP_ARCHIVED) &&
+        (im->internal_flags & FLAG_INTERNAL_ARCHIVED) &&
+        search_expr_max_cost(e) >= SEARCH_COST_BODY)
+        return 0;
+
     // failure to load is an error!
     int r = index_reload_record(state, msgno, &record);
     if (r) return 0;

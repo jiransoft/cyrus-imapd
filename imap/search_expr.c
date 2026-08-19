@@ -1231,9 +1231,13 @@ static int is_indexed_node(const search_expr_t *e)
     if (e->op == SEOP_NOT)
         return is_indexed_node(e->children);
 
-    return e->attr &&
-        ((e->op == SEOP_FUZZYMATCH && e->attr->part != SEARCH_PART_NONE) ||
-         (e->op == SEOP_MATCH && search_can_match(e->op, e->attr->part)));
+    /* Both operators have to be checked against the engine. Xapian's
+     * can_match() is "FUZZYMATCH && part != SEARCH_PART_NONE" plus the three
+     * MATCH parts, so this is unchanged there - but with search_engine: none
+     * there is no builder to run an indexed subquery with, and claiming a
+     * FUZZYMATCH node is indexed makes subquery_run_indexed() fail the whole
+     * search with IMAP_INTERNAL instead of falling back to a scan. */
+    return e->attr && search_can_match(e->op, e->attr->part);
 }
 
 static int is_folder_or_indexed(search_expr_t *e, void *rock __attribute__((unused)))
@@ -3423,5 +3427,12 @@ EXPORTED int search_attr_is_fuzzable(const search_attr_t *attr)
 EXPORTED enum search_cost search_attr_cost(const search_attr_t *attr)
 {
     return attr->cost;
+}
+
+/* The cost class of the most expensive attribute anywhere in the expression.
+ * SEARCH_COST_BODY means evaluating it has to map message files. */
+EXPORTED enum search_cost search_expr_max_cost(const search_expr_t *e)
+{
+    return maxcost(e, NULL);
 }
 

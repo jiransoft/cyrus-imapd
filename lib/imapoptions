@@ -2561,6 +2561,19 @@ If all partitions are over that limit, this feature is not used anymore.
  * rather than indexed lookups.  A value of 0 means always do indexed lookups.
  */
 
+{ "search_skip_archived", 0, SWITCH, "3.12.2" }
+/* If enabled, a search whose criteria include a body-class term (BODY,
+   TEXT, or an attachment body) silently skips every message that lives on
+   the archive partition, instead of reading those messages to evaluate the
+   term.  The whole message is skipped rather than just the term, so an
+   archived message matches neither \fBBODY x\fR nor \fBNOT BODY x\fR;
+   skipping only the term would make it a non-match, which negation would
+   turn back into a match.  Searches with no body-class term are unaffected
+   and still see archived messages.  Intended for deployments whose archive
+   partition is remote (EFS/NFS) and whose full-text search is served by an
+   external engine, where an unindexed brute-force search would otherwise
+   read the entire archive. */
+
 { "search_skipdiacrit", 1, SWITCH, "2.5.0" }
 /* When searching, should diacriticals be stripped from the search
    terms.  The default is "true", a search for "hav" will match

@@ -172,6 +172,7 @@ extern const search_attr_t *search_attr_find(const char *);
 extern const search_attr_t *search_attr_find_field(const char *field);
 extern int search_attr_is_fuzzable(const search_attr_t *);
 extern enum search_cost search_attr_cost(const search_attr_t *);
+extern enum search_cost search_expr_max_cost(const search_expr_t *);
 
 extern int search_getseword(struct protstream *prot, char *buf, int maxlen);
 
