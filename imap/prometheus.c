@@ -344,9 +344,16 @@ EXPORTED int prometheus_text_report(struct buf *buf, const char **mimetype)
                                  NULL);
 
         r = mappedfile_open(&mf, report_fname, 0);
-        if (r && reports[i].required) {
+        if (r) {
+            /* mappedfile_open leaves *mfp untouched on failure, so mf is
+             * still NULL here and mappedfile_readlock would dereference it.
+             * A missing optional report just contributes nothing: promstatsd
+             * unlinks and recreates each report on startup, so a scrape can
+             * land in that window, and `promstatsd -c` removes all three. */
             free(report_fname);
-            return r;
+            if (reports[i].required) return r;
+            r = 0;
+            continue;
         }
 
         r = mappedfile_readlock(mf);
