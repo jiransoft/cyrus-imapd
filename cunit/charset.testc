@@ -514,8 +514,10 @@ static void test_decode_mimeheader(void)
     CU_ASSERT_STRING_EQUAL(s, HTML_4d);
     free(s);
 
+    /* the space after the Hangul word is a word break like the one
+     * before it, not a repeat of it */
     static const char ASCII_EUC_KR[] = "A =?EUC-KR?B?wMzIo8Dn?= B";
-    static const char SEARCH_EUC_KR[] = "A""\x20\xec\x9d\xb4\xed\x98\xb8\xec\x9e\xac""B";
+    static const char SEARCH_EUC_KR[] = "A""\x20\xec\x9d\xb4\xed\x98\xb8\xec\x9e\xac\x20""B";
     flags = CHARSET_SKIPDIACRIT | CHARSET_MERGESPACE; /* default */
     s = charset_decode_mimeheader(ASCII_EUC_KR, flags);
     CU_ASSERT_PTR_NOT_NULL(s);
@@ -584,7 +586,7 @@ static void test_mimeheader_badcharset(void)
      * replaced with a single Unicode replacement char */
     char *s;
     static const char ASCII_1[] = "A =?foo?B?wMzIo8Dn?= B";
-    static const char SEARCH_1[] = "A " UTF8_REPLACEMENT "B";
+    static const char SEARCH_1[] = "A " UTF8_REPLACEMENT " B";
     int flags = CHARSET_SKIPDIACRIT | CHARSET_MERGESPACE; /* default */
 
     s = charset_decode_mimeheader(ASCII_1, flags);
@@ -895,6 +897,21 @@ static void test_extract(void)
     TESTCASE("you    probably \t haven't\r\nheard\t\r\tof them",
              "us-ascii", ENCODING_NONE, "PLAIN",
              "YOU PROBABLY HAVEN'T HEARD OF THEM");
+
+    /* a space between two characters that have no chartable translation
+     * (Hangul syllables, CJK ideographs, kana) is a real word break and
+     * must survive merging - the earlier space must not stay "pending" */
+    TESTCASE("[test] 한글 본문 テスト",
+             "utf-8", ENCODING_NONE, "PLAIN",
+             "[TEST] 한글 본문 テスト");
+    /* 검/결/과 (U+AC00 block) do have a table and always reset the flag;
+     * 본문/테스트 do not, so this only passes when the shortcut resets it */
+    TESTCASE("다국어 본문  테스트",
+             "utf-8", ENCODING_NONE, "PLAIN",
+             "다국어 본문 테스트");
+    /* the replacement character takes the same shortcut */
+    TESTCASE("a \300 b", "us-ascii", ENCODING_NONE, "PLAIN",
+             "A "UTF8_REPLACEMENT" B");
 
     /* invalid UTF-8 bytes become the Replacement character */
     TESTCASE("a\300b", "us-ascii", ENCODING_NONE, "PLAIN", /* 0xC0 */

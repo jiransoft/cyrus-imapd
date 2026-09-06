@@ -639,14 +639,17 @@ static void uni2searchform(struct convert_rock *rock, uint32_t c)
     unsigned char table16, table8;
 
     if (c == U_REPLACEMENT) {
+        s->seenspace = 0;
         convert_putc(rock->next, c);
         return;
     }
 
     table16 = chartables_translation_block16[(c>>16) & 0xff];
 
-    /* no translations */
+    /* no translations - but it is not whitespace either, so the next
+     * space must not be merged into the one before this character */
     if (table16 == 255) {
+        s->seenspace = 0;
         convert_putc(rock->next, c);
         return;
     }
@@ -655,6 +658,7 @@ static void uni2searchform(struct convert_rock *rock, uint32_t c)
 
     /* no translations */
     if (table8 == 255) {
+        s->seenspace = 0;
         convert_putc(rock->next, c);
         return;
     }

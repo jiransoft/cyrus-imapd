@@ -54,6 +54,9 @@
 #include "search_expr.h"
 #include "index.h"
 #include "message.h"
+#ifdef USE_HTTPD
+#include <libical/ical.h>
+#endif
 #include "charset.h"
 #include "annotate.h"
 #include "global.h"
@@ -1521,6 +1524,10 @@ static int search_string_match(message_t *m,
     int (*getter)(message_t *, struct buf *) = (int(*)(message_t *, struct buf *))data1;
     struct search_string_internal *internal = internalised;
 
+    /* An attribute without a getter can only be matched by a search
+     * engine that indexes its part; a scan has nothing to compare. */
+    if (!getter) return 0;
+
     r = getter(m, &buf);
     if (!r && buf.len)
         r = charset_searchstring(internal->s, internal->pat, buf.s, buf.len, charset_flags);
@@ -2543,6 +2550,69 @@ static int search_text_match(message_t *m,
     return sr.result;
 }
 
+/* ====================================================================== */
+
+#ifdef USE_HTTPD
+/* Collect the LOCATION property of every real component in a text/calendar
+ * body part, mirroring what index_getsearchtext() hands to a search engine
+ * as SEARCH_PART_LOCATION. */
+static int search_icallocation_cb(int isbody, charset_t charset, int encoding,
+                                  const char *type, const char *subtype,
+                                  const struct param *type_params __attribute__((unused)),
+                                  const char *disposition __attribute__((unused)),
+                                  const struct param *disposition_params __attribute__((unused)),
+                                  const struct message_guid *content_guid __attribute__((unused)),
+                                  const char *part __attribute__((unused)),
+                                  struct buf *data, void *rock)
+{
+    struct buf *out = (struct buf *)rock;
+    struct buf utf8 = BUF_INITIALIZER;
+    icalcomponent *ical, *comp;
+
+    if (!isbody || strcmpsafe(type, "TEXT") || strcmpsafe(subtype, "CALENDAR"))
+        return 0;
+    if (charset == CHARSET_UNKNOWN_CHARSET)
+        return 0;
+    if (charset_to_utf8(&utf8, data->s, data->len, charset, encoding)) {
+        buf_free(&utf8);
+        return 0;
+    }
+
+    ical = icalparser_parse_string(buf_cstring(&utf8));
+    buf_free(&utf8);
+    if (!ical) return 0;
+
+    for (comp = icalcomponent_get_first_real_component(ical);
+         comp;
+         comp = icalcomponent_get_next_component(ical, icalcomponent_isa(comp))) {
+        icalproperty *prop =
+            icalcomponent_get_first_property(comp, ICAL_LOCATION_PROPERTY);
+        const char *s = prop ? icalproperty_get_location(prop) : NULL;
+        if (s && *s) {
+            if (buf_len(out)) buf_putc(out, '\n');
+            buf_appendcstr(out, s);
+        }
+    }
+    icalcomponent_free(ical);
+
+    return 0;
+}
+#endif /* USE_HTTPD */
+
+/* Getter for the "location" attribute. Only a search engine used to be able
+ * to match it; without one, a NULL getter made search_string_match() call
+ * through a null pointer and kill the process. */
+static int search_get_icallocation(message_t *m, struct buf *buf)
+{
+    buf_reset(buf);
+#ifdef USE_HTTPD
+    return message_foreach_section(m, search_icallocation_cb, buf);
+#else
+    (void)m;
+    return 0;
+#endif
+}
+
 static int search_language_match(message_t *m __attribute__((unused)),
                                  const union search_value *v __attribute__((unused)),
                                  void *internalised __attribute__((unused)),
@@ -3236,7 +3306,7 @@ EXPORTED void search_attr_init(void)
             search_string_free,
             /*freeattr*/NULL,
             /*dupattr*/NULL,
-            (void *)0
+            (void *)search_get_icallocation
         },{
             "attachmentname",
             SEA_FUZZABLE,

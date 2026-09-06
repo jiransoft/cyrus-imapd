@@ -1,0 +1,77 @@
+#!perl
+use Cassandane::Tiny;
+
+# Text filters used to be answered only by the search engine. Without one
+# they fall back to a scan of the calendar mailbox, and the "location"
+# attribute had no scan getter: querying it killed the httpd worker.
+sub test_calendarevent_query_text_noengine
+    :min_version_3_9 :NoStartInstances
+{
+    my ($self) = @_;
+
+    $self->{instance}->{config}->set(search_engine => 'none');
+    $self->_start_instances();
+    $self->_setup_http_service_objects();
+
+    my $jmap = $self->{jmap};
+    $jmap->DefaultUsing([
+        'urn:ietf:params:jmap:core',
+        'urn:ietf:params:jmap:calendars',
+        'https://cyrusimap.org/ns/jmap/calendars',
+    ]);
+
+    my $res = $jmap->CallMethods([['CalendarEvent/set', { create => {
+        "1" => {
+            calendarIds => { Default => JSON::true },
+            title => "foo",
+            description => "bar",
+            locations => { loc1 => { name => "baz" } },
+            start => "2016-01-01T09:00:00",
+            duration => "PT1H",
+            timeZone => "Europe/London",
+        },
+        "2" => {
+            calendarIds => { Default => JSON::true },
+            title => "other",
+            description => "event",
+            locations => { loc1 => { name => "elsewhere" } },
+            start => "2016-01-02T09:00:00",
+            duration => "PT1H",
+            timeZone => "Europe/London",
+        },
+    }}, "R1"]]);
+    my $id1 = $res->[0][1]{created}{"1"}{id};
+    $self->assert_not_null($id1);
+    $self->assert_not_null($res->[0][1]{created}{"2"}{id});
+
+    # Without an engine "description" (body attribute) and the body leg of
+    # "text" are substring scans of the whole iCalendar component, so a
+    # description query would also hit SUMMARY/LOCATION text. Only the
+    # standalone location query proves the location getter is consulted.
+    my %textqueries = (
+        title => "foo",
+        description => "bar",
+        location => "baz",
+    );
+
+    while (my ($propname, $propval) = each %textqueries) {
+        # catch-all text search
+        $res = $jmap->CallMethods([['CalendarEvent/query', {
+            filter => { text => $propval },
+        }, "R1"]]);
+        $self->assert_num_equals(1, $res->[0][1]{total});
+        $self->assert_deep_equals([$id1], $res->[0][1]{ids});
+
+        # search by property
+        $res = $jmap->CallMethods([['CalendarEvent/query', {
+            filter => { $propname => $propval },
+        }, "R1"]]);
+        $self->assert_num_equals(1, $res->[0][1]{total});
+        $self->assert_deep_equals([$id1], $res->[0][1]{ids});
+
+        $res = $jmap->CallMethods([['CalendarEvent/query', {
+            filter => { $propname => "nope" },
+        }, "R1"]]);
+        $self->assert_num_equals(0, $res->[0][1]{total});
+    }
+}
